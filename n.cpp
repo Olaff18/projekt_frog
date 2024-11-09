@@ -1,4 +1,3 @@
-#define _CRT_SECURE_NO_WARNINGS
 #include <conio.h>
 #include <stdio.h>
 #include <windows.h>
@@ -7,15 +6,14 @@
 
 
 typedef struct {
-    int r;          // Number of rows in the playing area
-    int c;          // Number of columns in the playing area
-    int numCars;          // Number of cars in the game
-    int maxTime;          // Time limit for the game
-    int carSpeeds[];     // Array to store speeds for cars
+    int r;          // number of rows in the playing area
+    int c;          // number of columns in the playing area
+    int numCars;          // number of cars in the game
+    int maxTime;          // time limit for the game
+    int *carSpeeds; ;     // array to store speeds for cars // change to malloc later?
 } GameConfig;
 
-GameConfig config;
-
+// function for opening the file and loading the data into the config struct
 void loadConfig(GameConfig* config, const char* filename) {
     FILE* file = fopen(filename, "r");
     if (!file) {
@@ -26,14 +24,15 @@ void loadConfig(GameConfig* config, const char* filename) {
 
     char line[100];
     while (fgets(line, sizeof(line), file)) {
-        // Parse each configuration line
+        // parse each configuration line; 
         if (sscanf(line, "numRows=%d", &config->r) == 1) continue;
         if (sscanf(line, "numCols=%d", &config->c) == 1) continue;
         if (sscanf(line, "numCars=%d", &config->numCars) == 1) continue;
         if (sscanf(line, "maxTime=%d", &config->maxTime) == 1) continue;
 
-        // For carSpeeds, parse as a comma-separated lists
+        // for carSpeeds, parse as a comma-separated lists
         if (strncmp(line, "carSpeeds=", 10) == 0) {
+            config->carSpeeds = (int*)malloc(config->numCars * sizeof(int));
             char* speeds = line + 10; // a pointer to the first character after "carSpeeds=" in line to directly access the comma-separated values
             for (int i = 0; i < config->numCars; i++) {
                 config->carSpeeds[i] = atoi(strtok(i == 0 ? speeds : NULL, ","));
@@ -46,14 +45,6 @@ void loadConfig(GameConfig* config, const char* filename) {
     
 }
 
-// Allocate a single block of memory for the 2D buffer
-
-// declared constants for: number of cars, amount of the rows and amount of the columns
-// const int num_cars = 5;
-// const int r = 12, c = 25;
-// declared char 2dim array, as a buffer for storing the map characters
-// char buffer[2*r+1][c];
-
 // struct for cars, with parameters: row - cars row, cx - cars x coordinate, speed - cars speed
 typedef struct {
     int row;
@@ -62,19 +53,13 @@ typedef struct {
     time_t lastMove; // Time representation; to capture the point of time of cars last move, to update its position
 } Car;
 
-// Declare a pointer for dynamic array of Car structs
-
-
-
 typedef struct {
-    int x;        // Current x-position of the frog
-    int y;        // Current y-position of the frog
-    int lives;    // Number of lives the frog has
-    int score;    // Player's score
+    int x;        // current x-position of the frog
+    int y;        // current y-position of the frog
+    int lives;    // number of lives the frog has
+    int score;    // player's score
     char shape;
 } Frog;
-
-Frog frog;
 
 void green() {
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -92,7 +77,7 @@ void white() {
 }
 
 
-
+// function for changing cursors position
 void gotoxy(int x, int y) {
     COORD coordinate;
     coordinate.X = x;
@@ -100,34 +85,31 @@ void gotoxy(int x, int y) {
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coordinate);
 }
 
+// function for generating a random row, with the step = 2, so the values are only odd
 int GetRandom(int max_value, int min_value, int step) {
-    // int num_steps = (max_value - min_value) / step + 1;
     int random_value = (rand() % ((++max_value - min_value) / step)) * step + min_value;
     return random_value;
 }
 
 // initializing the cars and its parameters
-void initCars(Car* cars) {
-
-    
-    // an array for storing the rows of cars that have been already used, so they don't repeat
+void initCars(Car* cars, GameConfig config) {  
+    // dynamic 1D array, for storing the rows of cars that had been already used, so they don't repeat
     int* crows = (int*)malloc(config.numCars * sizeof(int));
-    // int crows[config.numCars];
 
-
+    // for loop executing num_cars times to generate an odd row for each car
     for (int i = 0; i < config.numCars; i++) {
+        // flag to check if some row was already assigned to some car: 0 - it was; 1 - it wasn't
         int flag_in = 0;
+        // int rrow - to store a current row
         int rrow = 0;
 
         if (i == 0) {
             int rrow = GetRandom(2 * config.r - 1, 1, 2); // if its the first car, we assign it a row (with a odd y coordinate, because road/lane can only have such)
             cars[i].row = rrow;
             crows[i] = rrow;
-            //printf("%d", rrow);
-
         }
         else {
-            while (flag_in == 0) {
+            while (flag_in == 0) { // generates odd rows, until it generates a unique one
 
                 rrow = GetRandom(2 * config.r , 1, 2);
                 int count = 0;
@@ -139,98 +121,83 @@ void initCars(Car* cars) {
                 if (count == i) {
                     cars[i].row = rrow;
                     crows[i] = rrow;
-                    //printf("%d", rrow);
                     flag_in = 1;
 
                 }
-                // cars[i].row = rand() % ((r-1) - 1 + 1);
             }
         }
 
-        cars[i].speed = config.carSpeeds[i];
         cars[i].lastMove = time(NULL); // time(NULL) returns current point of time
         cars[i].cx = 1;
-        if (i == config.numCars - 1) free(crows);
+        
     }
-    
+    free(crows);
  }
-
-    
 
 
 // updating cars position based on its last move
-void updateCars(Car* cars) {
+void updateCars(Car* cars, GameConfig config) {
     time_t currentTime = time(NULL); // time(NULL) returns current point of time
 
     for (int i = 0; i < config.numCars; i++) {
-        if ((currentTime - cars[i].lastMove) >= cars[i].speed) { //? substracting current time and time of the last move and comparing it to cars speed (in seconds), gives us the answer whether we should move the car or no
-            // Move car to new position
+        if ((currentTime - cars[i].lastMove) >= cars[i].speed) { // substracting current time and time of the last move and comparing it to cars speed (in seconds), gives us the answer whether we should move the car or no
+            // move car to new position
             cars[i].cx++;
             cars[i].lastMove = currentTime;
-
+            // if car is next to the border, wrap it
             if (cars[i].cx == config.c - 1) {
                 cars[i].cx = 1;
             }
         }
     }
 }
-
-int frogHit(Car* cars) {
+// function for checking if the frog was hit by a car
+int frogHit(Car *cars, GameConfig config, Frog frog) {
     for (int i = 0; i < config.numCars; i++) {
         if (cars[i].cx == frog.x && cars[i].row == frog.y) return 1;
     }
     return 0;
 }
 
-// void drawScreen() {
-//     gotoxy(0, 0);
-//     for (int y = 0; y < 2*r+1; y++) {
-//         for (int x = 0; x < c; x++) {
-//             if (buffer[y][x] == 'C') red();
-//             else if (buffer[y][x] == '@') green();
-//             else white();
-
-//             printf("%c", buffer[y][x]);
-//         }
-//         printf("\n");
-//     }
-// }
-
-void drawScreen(char* buffer) {
+// function for drawing the entire game screen based on what is stored in the buffer
+void drawScreen(char* buffer, GameConfig config) {
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     CHAR_INFO* charBuffer = (CHAR_INFO*)malloc((2 * config.r + 1) * config.c * sizeof(CHAR_INFO));
     COORD bufferSize = { config.c, 2 * config.r + 1 };
     COORD bufferCoord = { 0, 0 };
     SMALL_RECT writeRegion = { 0, 0, config.c - 1, 2 * config.r };
 
-    // Populate charBuffer with data from buffer
+    // fill charBuffer with data from buffer
     for (int y = 0; y < 2 * config.r + 1; y++) {
         for (int x = 0; x < config.c; x++) {
             charBuffer[y * config.c + x].Char.AsciiChar = buffer[y * config.c + x];
-            if (buffer[y * config.c + x] == '@') charBuffer[y * config.c + x].Attributes = FOREGROUND_GREEN;
-            else if (buffer[y * config.c + x] == 'C') charBuffer[y * config.c + x].Attributes = FOREGROUND_RED;
-            else charBuffer[y * config.c + x].Attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // White text
-
+            if (buffer[y * config.c + x] == '@') charBuffer[y * config.c + x].Attributes = FOREGROUND_GREEN; // if (y,x) = frog symbol, set the color green
+            else if (buffer[y * config.c + x] == 'C') charBuffer[y * config.c + x].Attributes = FOREGROUND_RED; // if (y,x) = car symbol, set the color to red
+            else charBuffer[y * config.c + x].Attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // if other symbol, just w  hite text
         }
     }
-    // Write the charBuffer to the console
-    WriteConsoleOutput(hConsole, (CHAR_INFO*)charBuffer, bufferSize, bufferCoord, &writeRegion);
+    // write the charBuffer to the console; sidenote: I used WriteConsoleOutputA specifically for VisualStudio, because it's console treats characters as UNICODE characters, and it leads to display errors
+    WriteConsoleOutputA(hConsole, (CHAR_INFO*)charBuffer, bufferSize, bufferCoord, &writeRegion);
 
 }
 
-void drawStatus(double elapsedTime) {
-    gotoxy(0, 2 * config.r + 2); // Move cursor to the line below the game area
+// draw the current status of the game
+void drawStatus(double elapsedTime, GameConfig config, Frog frog) {
+    gotoxy(0, 2 * config.r + 2); // move cursor to the line below the game area
     printf("Michal Binek 203726; Timer: %d s/ %d s; Score: %d; Lives: %d", (int)elapsedTime, config.maxTime, frog.score, frog.lives);
 }
 
-void clearBuffer(char* buffer) {
+// clearing the entire buffer with empty spaces
+void clearBuffer(char* buffer, GameConfig config) {
     for (int y = 0; y < 2 * config.r + 1; y++) {
         for (int x = 0; x < config.c; x++) {
             buffer[y * config.c + x] = ' ';
         }
     }
 }
-void drawCars(char* buffer, Car* cars) {
+
+// putting the car symbol into the buffer at a specified position
+void drawCars(char* buffer, Car* cars, GameConfig config) {
     for (int i = 0; i < config.numCars; i++) {
         buffer[cars[i].row * config.c + cars[i].cx] = 'C'; // 'C' represents the car
     }
@@ -238,20 +205,26 @@ void drawCars(char* buffer, Car* cars) {
 
 
 int main() {
-    GameConfig* cptr = &config;
-    loadConfig(cptr, "config.txt");
+    GameConfig config;
+    GameConfig* cnfptr = &config;
+    loadConfig(cnfptr, "config.txt");
     
     char* buffer = (char*)malloc((2 * config.r + 1) * config.c * sizeof(char));
     
 
     Car* cars = (Car*)malloc(config.numCars * sizeof(Car));
 
+    // setting car speed
+    for(int i = 0; i<config.numCars; i++){
+        cars[i].speed = config.carSpeeds[i];
+    }
+
     
-    
-    
+    Frog frog;
     // game.maxTime = 60;
     frog.shape = '@';
     frog.lives = 5;
+    frog.score = 0;
     char action;
     time_t startTime = time(NULL);
     //printf("Config.numCars: %d\n", config.numCars);
@@ -259,19 +232,19 @@ int main() {
 repeat:
 
     srand(time(NULL)); // ? seeding
-    initCars(cars);
+    initCars(cars, config);
 
-    //int px = c/2, py = 2*r-1;
+    // initial frog position at the centre of the bottom line
     frog.x = config.c / 2;
     frog.y = 2 * config.r - 1;
-    frog.score = 0;
+    
     
 
-    system("cls"); // Clear the screen once at the start
+    system("cls"); // clear the screen once at the start
 
 
     do {
-        clearBuffer(buffer);
+        clearBuffer(buffer, config);
 
         time_t currentTime = time(NULL);
         double elapsedTime = difftime(currentTime, startTime);
@@ -284,9 +257,7 @@ repeat:
             return 0;
         }
 
-        // Convert to milliseconds
-        //int milliseconds = (int)((elapsedTime - (int)elapsedTime) * 1000); // extracting the fraction part of elapsedTime, multipli by 1000 and (int) to get milliseconds
-        // Draw the border
+        // draw the border
         for (int x = 0; x < config.c; x++) { // rows
             buffer[x] = '#';
             buffer[2 * config.r * config.c + x] = '#';
@@ -317,11 +288,11 @@ repeat:
                 }
             }*/
 
-        updateCars(cars);
-        drawCars(buffer, cars);
+        updateCars(cars, config);
+        drawCars(buffer, cars, config);
 
-        drawScreen(buffer);
-        drawStatus(elapsedTime);
+        drawScreen(buffer, config);
+        drawStatus(elapsedTime, config, frog);
         // when frog gets to the finish line
         if (frog.y - 1 == 0) {
             frog.score += 1;
@@ -351,11 +322,13 @@ repeat:
             if ((action == 'd' || action == 'D') && frog.x + 1 != config.c - 1) frog.x++;
         }
         // check if the frog hit the car, if yes - restart the game and -1 life
-        if (frogHit(cars) == 1) {
+        if (frogHit(cars, config, frog) == 1) {
             if (--frog.lives == 0) {
                 gotoxy(0, 2 * config.r + 3);
                 printf("You lost. Your score was: %d", frog.score);
                 Sleep(2000);
+                free(buffer);
+                free(cars); 
                 return 0;
             }
             gotoxy(0, 2 * config.r + 3);
