@@ -4,13 +4,17 @@
 #include <stdlib.h>
 #include <time.h>
 
+#define DISAPPEAR_WAIT 4
 
 typedef struct {
     int r;          // number of rows in the playing area
     int c;          // number of columns in the playing area
     int numCars;          // number of cars in the game
     int maxTime;          // time limit for the game
-    int *carSpeeds; ;     // array to store speeds for cars // change to malloc later?
+    double *carSpeeds;       // array to store speeds for cars // change to malloc later?
+    char frogShape;
+    char frogColor[10];
+    char carColor[10];
 } GameConfig;
 
 // function for opening the file and loading the data into the config struct
@@ -32,7 +36,7 @@ void loadConfig(GameConfig* config, const char* filename) {
 
         // for carSpeeds, parse as a comma-separated lists
         if (strncmp(line, "carSpeeds=", 10) == 0) {
-            config->carSpeeds = (int*)malloc(config->numCars * sizeof(int));
+            config->carSpeeds = (double*)malloc(config->numCars * sizeof(double));
             char* speeds = line + 10; // a pointer to the first character after "carSpeeds=" in line to directly access the comma-separated values
             for (int i = 0; i < config->numCars; i++) {
                 config->carSpeeds[i] = atoi(strtok(i == 0 ? speeds : NULL, ","));
@@ -48,9 +52,13 @@ void loadConfig(GameConfig* config, const char* filename) {
 // struct for cars, with parameters: row - cars row, cx - cars x coordinate, speed - cars speed
 typedef struct {
     int row;
-    int cx;
-    int speed;
-    time_t lastMove; // Time representation; to capture the point of time of cars last move, to update its position
+    int cx = 1; // ????
+    double speed;
+    double lastMove; // time representation; to capture the point of time of cars last move, to update its position
+    double disappearTime;
+    int disapeared = 0;
+    char symbol = 'C';
+    int prev_pos = -1;
 } Car;
 
 typedef struct {
@@ -86,13 +94,47 @@ void gotoxy(int x, int y) {
 }
 
 // function for generating a random row, with the step = 2, so the values are only odd
-int GetRandom(int max_value, int min_value, int step) {
+int getRandomStep(int max_value, int min_value, int step) {
     int random_value = (rand() % ((++max_value - min_value) / step)) * step + min_value;
     return random_value;
 }
 
+// function for generating a random car
+int getRandom(int max_value, int min_value) {
+    int random_value = rand() % ((++max_value - min_value)) + min_value;
+    return random_value;
+}
+
+void row(Car* cars, GameConfig config, int *i, int *rrow, int *flag_in, int *crows){
+    if (&i == 0) {
+            int rrow = getRandomStep(2 * config.r - 1, 1, 2); // if its the first car, we assign it a row (with a odd y coordinate, because road/lane can only have such)
+            cars[0].row = rrow;
+            crows[0] = rrow;
+        }
+        else {
+            while (*flag_in == 0) { // generates odd rows, until it generates a unique one
+
+                *rrow = getRandomStep(2 * config.r , 1, 2);
+                int count = 0;
+                for (int j = 0; j < *i; j++) {
+                    if (*rrow != crows[j]) {
+                        ++count;
+                    }
+                }
+                if (count == *i) {
+                    cars[*i].row = *rrow;
+                    cars[*i].prev_pos = *rrow;
+                    crows[*i] = *rrow;
+                    *flag_in = 1;
+
+                }
+            }
+        }
+}
+
 // initializing the cars and its parameters
-void initCars(Car* cars, GameConfig config) {  
+void initCars(Car* cars, GameConfig config) { 
+    
     // dynamic 1D array, for storing the rows of cars that had been already used, so they don't repeat
     int* crows = (int*)malloc(config.numCars * sizeof(int));
 
@@ -102,59 +144,84 @@ void initCars(Car* cars, GameConfig config) {
         int flag_in = 0;
         // int rrow - to store a current row
         int rrow = 0;
-
-        if (i == 0) {
-            int rrow = GetRandom(2 * config.r - 1, 1, 2); // if its the first car, we assign it a row (with a odd y coordinate, because road/lane can only have such)
-            cars[i].row = rrow;
-            crows[i] = rrow;
-        }
-        else {
-            while (flag_in == 0) { // generates odd rows, until it generates a unique one
-
-                rrow = GetRandom(2 * config.r , 1, 2);
-                int count = 0;
-                for (int j = 0; j < i; j++) {
-                    if (rrow != crows[j]) {
-                        ++count;
-                    }
-                }
-                if (count == i) {
-                    cars[i].row = rrow;
-                    crows[i] = rrow;
-                    flag_in = 1;
-
-                }
-            }
-        }
-
-        cars[i].lastMove = time(NULL); // time(NULL) returns current point of time
+        row(cars, config, &i, &rrow, &flag_in, crows);
+        DWORD start_time = GetTickCount();
+        cars[i].lastMove = static_cast<double>(start_time);
         cars[i].cx = 1;
         
     }
     free(crows);
- }
+}
 
+// setting the initial speed for the cars
+void setSpeed(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED){
+        for(int i = 0; i<config.numCars; i++){       
+        if(config.carSpeeds[i] < MIN_SPEED) cars[i].speed = MIN_SPEED; // if set car speed is below the minimum allowed speed, set it to the minimum allowed speed
+        else if(config.carSpeeds[i] > MAX_SPEED) cars[i].speed = MAX_SPEED; // if set car speed is over the maximum allowed speed, set it to the maximum allowed speed
+        else cars[i].speed = config.carSpeeds[i];
+    }
+}
 
 // updating cars position based on its last move
-void updateCars(Car* cars, GameConfig config) {
-    time_t currentTime = time(NULL); // time(NULL) returns current point of time
-
+void updateCars(Car* cars, GameConfig config, int dis) {
+    // time_t currentTime = time(NULL); // time(NULL) returns current point of time
+    DWORD start_time = GetTickCount();
+    double current_time = static_cast<double>(start_time);
+    double elapsedTime, disappearTime;
     for (int i = 0; i < config.numCars; i++) {
-        if ((currentTime - cars[i].lastMove) >= cars[i].speed) { // substracting current time and time of the last move and comparing it to cars speed (in seconds), gives us the answer whether we should move the car or no
-            // move car to new position
-            cars[i].cx++;
-            cars[i].lastMove = currentTime;
-            // if car is next to the border, wrap it
-            if (cars[i].cx == config.c - 1) {
-                cars[i].cx = 1;
+        if(cars[i].disapeared == 0){
+            elapsedTime = current_time - cars[i].lastMove;
+            double interval = 1000/cars[i].speed;
+            // cars[i].accumulatedTime += elapsedTime;
+            if (elapsedTime >= interval) { // checking if the interval in ms is <= than elapsedTime, if it is, move the car by 1 column          
+                cars[i].cx++;
+                cars[i].lastMove = current_time;
+                // if car is next to the border, wrap it
+                if (cars[i].cx == config.c - 1) {
+                    cars[i].cx = 1;
+                    if(i == dis){
+                        cars[i].symbol=' ';
+                        cars[i].disapeared = 1;
+                        DWORD time = GetTickCount();
+                        cars[i].disappearTime = static_cast<double>(time);
+                    }
+                }
+            }
+        }
+        else{
+            elapsedTime = current_time - cars[i].disappearTime;
+            if(elapsedTime >= DISAPPEAR_WAIT*1000){
+                if(config.r > config.numCars){
+                    while(1){
+                        int newRow = getRandomStep(2 * config.r , 1, 2);
+                        if(newRow != cars[i].prev_pos){
+                            int counter = 0;
+                            for(int j=0; j<config.numCars; j++){
+                                if(cars[j].row != newRow){
+                                    counter++;
+                                }
+                            }
+                            if(counter==config.numCars){
+                                cars[i].disapeared = 0;
+                                cars[i].row = newRow;
+                                cars[i].symbol='C';
+                                break;
+                            }
+                        }
+                    }
+                }
+                else{
+                    cars[i].disapeared = 0;
+                }
             }
         }
     }
 }
+
 // function for checking if the frog was hit by a car
 int frogHit(Car *cars, GameConfig config, Frog frog) {
     for (int i = 0; i < config.numCars; i++) {
-        if (cars[i].cx == frog.x && cars[i].row == frog.y) return 1;
+        if (cars[i].cx == frog.x && cars[i].row == frog.y && cars[i].disapeared == 0) return 1;
     }
     return 0;
 }
@@ -199,26 +266,23 @@ void clearBuffer(char* buffer, GameConfig config) {
 // putting the car symbol into the buffer at a specified position
 void drawCars(char* buffer, Car* cars, GameConfig config) {
     for (int i = 0; i < config.numCars; i++) {
-        buffer[cars[i].row * config.c + cars[i].cx] = 'C'; // 'C' represents the car
+        buffer[cars[i].row * config.c + cars[i].cx] = cars[i].symbol; // 'C' represents the car
     }
 }
-
 
 int main() {
     GameConfig config;
     GameConfig* cnfptr = &config;
-    loadConfig(cnfptr, "config.txt");
-    
+    loadConfig(cnfptr, "config.txt");   
     char* buffer = (char*)malloc((2 * config.r + 1) * config.c * sizeof(char));
-    
 
+    const int MIN_SPEED = 1;
+    const int MAX_SPEED = config.c - 2;
+
+    int dis = -1; // number of a disappeared car
     Car* cars = (Car*)malloc(config.numCars * sizeof(Car));
 
-    // setting car speed
-    for(int i = 0; i<config.numCars; i++){
-        cars[i].speed = config.carSpeeds[i];
-    }
-
+    setSpeed(cars, config, MIN_SPEED, MAX_SPEED);
     
     Frog frog;
     // game.maxTime = 60;
@@ -227,8 +291,13 @@ int main() {
     frog.score = 0;
     char action;
     time_t startTime = time(NULL);
-    //printf("Config.numCars: %d\n", config.numCars);
-    //printf("Car array allocated at: %p\n", cars);
+
+    cars[0].symbol = 'C';
+    cars[1].symbol = 'C';
+    cars[2].symbol = 'C';
+    cars[3].symbol = 'C';
+    cars[4].symbol = 'C';
+    
 repeat:
 
     srand(time(NULL)); // ? seeding
@@ -238,19 +307,32 @@ repeat:
     frog.x = config.c / 2;
     frog.y = 2 * config.r - 1;
     
-    
+    for(int i=0; i<config.numCars; i++){
+        cars[i].disapeared=0;
+        cars[i].cx = 1;
+    }
 
     system("cls"); // clear the screen once at the start
-
 
     do {
         clearBuffer(buffer, config);
 
         time_t currentTime = time(NULL);
-        double elapsedTime = difftime(currentTime, startTime);
+        int elapsedTime = difftime(currentTime, startTime);
+        
+
+        if(elapsedTime % 5 == 0 && elapsedTime > 0){
+            // disappearing car
+            // do {
+                dis = getRandom(config.numCars, 0);
+            // } while (cars[dis].disapeared == 0);
+            gotoxy(0, 2 * config.r + 3);
+            printf("dis: %d", dis);
+        }
+        
 
         // if the time reaches the limit - end the game
-        if ((int)elapsedTime == config.maxTime) {
+        if (elapsedTime == config.maxTime) {
             gotoxy(0, 2 * config.r + 3);
             printf("Out of time! Your score is: %d", frog.score);
             Sleep(2000);
@@ -273,22 +355,9 @@ repeat:
             }
         }
 
-        // Draw the player's new position
+        // draw the player's new position
         buffer[frog.y * config.c + frog.x] = frog.shape;
-
-        //print car
-
-            /*for (int i = 0; i < num_cars; i++) {
-                if (cars[i].row == y && cars[i].cx == x) {
-                    if (i == 1) printf("1");
-                    if (i == 2) printf("2");
-                    if (i == 3) printf("3");
-                    if (i == 4) printf("4");
-                    if (i == 5) printf("5");
-                }
-            }*/
-
-        updateCars(cars, config);
+        updateCars(cars, config, dis);
         drawCars(buffer, cars, config);
 
         drawScreen(buffer, config);
@@ -305,17 +374,14 @@ repeat:
         }
 
 
-        // Check for user input
+        // check for user input
         if (_kbhit()) {
             action = _getch();
             if (action == 'x') {
                 break;
             }
-            // Update the previous position
-            /*prev_px = px;
-            prev_py = py;*/
 
-            // Move the player based on input
+            // move the player based on input
             if ((action == 'w' || action == 'W') && frog.y - 1 != 0) frog.y--;
             if ((action == 's' || action == 'S') && frog.y + 1 != 2 * config.r) frog.y++;
             if ((action == 'a' || action == 'A') && frog.x - 1 != 0) frog.x--;
@@ -337,8 +403,6 @@ repeat:
             startTime += 2;
             goto repeat;
         }
-
-        // Sleep(50); // Add a slight delay to control the update speed
     } while (1);
 
     free(buffer);
@@ -346,3 +410,16 @@ repeat:
 
     return 0;
 }
+
+// updates:
+// cleared unnecessary comments
+// new concept of speed: frequency instead of periods - car speed is columns/s now
+// speed limits
+// concept of disappearing cars - every x seconds a random car will disappear, with x second cooldown, will appear in a new row
+
+// to add:
+// frogShape, frog and car color
+// if numCars > numLanes -> error
+// when lost print that lives 0
+// when press 'x' print: you exited the game
+// discard of code in main(), create more functions
