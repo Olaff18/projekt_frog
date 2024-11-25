@@ -1,11 +1,14 @@
-#include <conio.h>
-#include <stdio.h>
-#include <windows.h>
+#include <ncurses.h>
 #include <stdlib.h>
+#include <stdio.h>
+#define _POSIX_C_SOURCE 199309L
 #include <time.h>
+#include <string.h>
 
-#define DISAPPEAR_WAIT 4
-#define QUIT_TIME 3
+#define DISAPPEAR_WAIT 2   // cooldown after car disappearing
+#define QUIT_TIME	   3							// .. seconds to quit
+#define QUIT		  'x'
+#define DIS_INT        3   // car disappearing interval in seconds
 
 typedef struct {
     int r;          // number of rows in the playing area
@@ -16,6 +19,7 @@ typedef struct {
     char frogShape;
     char frogColor[10];
     char carColor[10];
+    int frogLives;
 } GameConfig;
 
 // function for opening the file and loading the data into the config struct
@@ -34,7 +38,7 @@ void loadConfig(GameConfig* config, const char* filename) {
         if (sscanf(line, "numCols=%d", &config->c) == 1) continue;
         if (sscanf(line, "numCars=%d", &config->numCars) == 1) continue;
         if (sscanf(line, "maxTime=%d", &config->maxTime) == 1) continue;
-
+        if (sscanf(line, "frogLives=%d", &config->frogLives) == 1) continue;
         // for carSpeeds, parse as a comma-separated lists
         if (strncmp(line, "carSpeeds=", 10) == 0) {
             config->carSpeeds = (double*)malloc(config->numCars * sizeof(double));
@@ -43,6 +47,7 @@ void loadConfig(GameConfig* config, const char* filename) {
                 config->carSpeeds[i] = atoi(strtok(i == 0 ? speeds : NULL, ","));
             }
         }
+        
     }
     
 
@@ -50,16 +55,32 @@ void loadConfig(GameConfig* config, const char* filename) {
     
 }
 
-// struct for cars, with parameters: row - cars row, cx - cars x coordinate, speed - cars speed
+typedef struct {
+    WINDOW* game_win;   // main game window
+    WINDOW* status_win; // status menu window
+} Windows;
+
+// initialize windows
+Windows initWindows(GameConfig config) {
+    Windows windows;
+    windows.game_win = newwin(2 * config.r + 1, config.c, 0, 0);
+    windows.status_win = newwin(3, config.c, 2 * config.r + 2, 0);
+    box(windows.status_win, 0, 0); // draw a border for the status menu
+    refresh();
+    return windows;
+}
+
+
+// struct for cars, with parameters: row - cars w, cx - cars x coordinate, speed - cars speed
 typedef struct {
     int row;
-    int cx = 1; // ????
+    int cx;
     double speed;
     double lastMove; // time representation; to capture the point of time of cars last move, to update its position
     double disappearTime;
-    int disapeared = 0;
-    char symbol = 'C';
-    int prev_pos = -1;
+    int disapeared;
+    char symbol;
+    int prev_pos;
 } Car;
 
 typedef struct {
@@ -69,30 +90,6 @@ typedef struct {
     int score;    // player's score
     char shape;
 } Frog;
-
-void green() {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    SetConsoleTextAttribute(hConsole, 10);
-}
-
-void red() {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    SetConsoleTextAttribute(hConsole, FOREGROUND_RED);
-}
-
-void white() {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-}
-
-
-// function for changing cursors position
-void gotoxy(int x, int y) {
-    COORD coordinate;
-    coordinate.X = x;
-    coordinate.Y = y;
-    SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), coordinate);
-}
 
 // function for generating a random row, with the step = 2, so the values are only odd
 int getRandomStep(int max_value, int min_value, int step) {
@@ -146,13 +143,16 @@ void initCars(Car* cars, GameConfig config) {
         // int rrow - to store a current row
         int rrow = 0;
         row(cars, config, &i, &rrow, &flag_in, crows);
-        DWORD start_time = GetTickCount();
-        cars[i].lastMove = static_cast<double>(start_time);
+        struct timespec start_time;
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+        double start_time_ms = start_time.tv_sec * 1000 + start_time.tv_nsec / 1000000;
+        cars[i].lastMove = start_time_ms;
         cars[i].cx = 1;
         
     }
     free(crows);
 }
+
 
 // setting the initial speed for the cars
 void setSpeed(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED){
@@ -166,14 +166,15 @@ void setSpeed(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED){
 // updating cars position based on its last move
 void updateCars(Car* cars, GameConfig config, int dis) {
     // time_t currentTime = time(NULL); // time(NULL) returns current point of time
-    DWORD start_time = GetTickCount();
-    double current_time = static_cast<double>(start_time);
+    struct timespec start_time;
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // convert to a double representing milliseconds
+    double current_time = start_time.tv_sec * 1000.0 + start_time.tv_nsec / 1000000.0;
     double elapsedTime, disappearTime;
     for (int i = 0; i < config.numCars; i++) {
         if(cars[i].disapeared == 0){
             elapsedTime = current_time - cars[i].lastMove;
             double interval = 1000/cars[i].speed;
-            // cars[i].accumulatedTime += elapsedTime;
             if (elapsedTime >= interval) { // checking if the interval in ms is <= than elapsedTime, if it is, move the car by 1 column          
                 cars[i].cx++;
                 cars[i].lastMove = current_time;
@@ -183,8 +184,11 @@ void updateCars(Car* cars, GameConfig config, int dis) {
                     if(i == dis){
                         cars[i].symbol=' ';
                         cars[i].disapeared = 1;
-                        DWORD time = GetTickCount();
-                        cars[i].disappearTime = static_cast<double>(time);
+                        struct timespec time;
+                        clock_gettime(CLOCK_MONOTONIC, &time);
+                        // convert to a double representing milliseconds
+                        double time_ms = start_time.tv_sec * 1000.0 + start_time.tv_nsec / 1000000.0;
+                        cars[i].disappearTime = time_ms;
                     }
                 }
             }
@@ -220,56 +224,40 @@ void updateCars(Car* cars, GameConfig config, int dis) {
 }
 
 // function for checking if the frog was hit by a car
-int frogHit(Car *cars, GameConfig config, Frog* frog, char* buffer, time_t* startTime) {
+int frogHit(Car *cars, GameConfig config, Frog* frog, char* buffer, WINDOW* win) {
+            
     for (int i = 0; i < config.numCars; i++) {
+
+        if (!cars || !frog) {
+        fprintf(stderr, "Invalid pointer: cars or frog is NULL.\n");
+        return -1;
+        }
+        if (i < 0 || i >= config.numCars) {
+            fprintf(stderr, "Out of bounds access on cars array: i=%d\n", i);
+            return -1;
+        }
+
         if (cars[i].cx == frog->x && cars[i].row == frog->y && cars[i].disapeared == 0){
+
             frog->lives -= 1;
-            if (frog->lives == 0) {
-                gotoxy(0, 2 * config.r + 3);
-                printf("You lost. Your score was: %d", frog->score);
-                Sleep(2000);
+            if ((frog->lives) == 0) {
+
+                
                 free(buffer);
                 free(cars); 
-                return 1;
+                return 1; // other end game logic needed
             }
-            gotoxy(0, 2 * config.r + 3);
-            printf("Frog got ran over:( Try again. Lives remaining: %d", frog->lives);
-            Sleep(2000);
-            *startTime += 2;
-            return 0;
+            return 2; // hit, but lives > 0
         }
     }
+    // frog hasn't been hit
+    return 0;
 }
 
-// function for drawing the entire game screen based on what is stored in the buffer
-void drawScreen(char* buffer, GameConfig config) {
-    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    CHAR_INFO* charBuffer = (CHAR_INFO*)malloc((2 * config.r + 1) * config.c * sizeof(CHAR_INFO));
-    COORD bufferSize = { config.c, 2 * config.r + 1 };
-    COORD bufferCoord = { 0, 0 };
-    SMALL_RECT writeRegion = { 0, 0, config.c - 1, 2 * config.r };
-
-    // fill charBuffer with data from buffer
-    for (int y = 0; y < 2 * config.r + 1; y++) {
-        for (int x = 0; x < config.c; x++) {
-            charBuffer[y * config.c + x].Char.AsciiChar = buffer[y * config.c + x];
-            if (buffer[y * config.c + x] == '@') charBuffer[y * config.c + x].Attributes = FOREGROUND_GREEN; // if (y,x) = frog symbol, set the color green
-            else if (buffer[y * config.c + x] == 'C') charBuffer[y * config.c + x].Attributes = FOREGROUND_RED; // if (y,x) = car symbol, set the color to red
-            else charBuffer[y * config.c + x].Attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // if other symbol, just w  hite text
-        }
-    }
-    // write the charBuffer to the console; sidenote: I used WriteConsoleOutputA specifically for VisualStudio, because it's console treats characters as UNICODE characters, and it leads to display errors
-    WriteConsoleOutputA(hConsole, (CHAR_INFO*)charBuffer, bufferSize, bufferCoord, &writeRegion);
-
+char* createBuffer(GameConfig config) {
+    return (char*)malloc((2 * config.r + 1) * config.c * sizeof(char));
 }
 
-// draw the current status of the game
-void drawStatus(double elapsedTime, GameConfig config, Frog frog) {
-    gotoxy(0, 2 * config.r + 2); // move cursor to the line below the game area
-    printf("Michal Binek 203726; Timer: %d s/ %d s; Score: %d; Lives: %d", (int)elapsedTime, config.maxTime, frog.score, frog.lives);
-}
-
-// clearing the entire buffer with empty spaces
 void clearBuffer(char* buffer, GameConfig config) {
     for (int y = 0; y < 2 * config.r + 1; y++) {
         for (int x = 0; x < config.c; x++) {
@@ -278,41 +266,97 @@ void clearBuffer(char* buffer, GameConfig config) {
     }
 }
 
-// putting the car symbol into the buffer at a specified position
+void drawBuffer(WINDOW* win, char* buffer, GameConfig config) {
+    for (int y = 0; y < 2 * config.r + 1; y++) {
+        for (int x = 0; x < config.c; x++) {
+            char ch = buffer[y * config.c + x];
+            wmove(win, y, x); // Move to position in window
+            if (ch == '@') {
+                wattron(win, COLOR_PAIR(1)); // Set color for frog
+                waddch(win, ch);
+                wattroff(win, COLOR_PAIR(1)); // Reset color
+            } else if (ch == 'C') {
+                wattron(win, COLOR_PAIR(2)); // Set color for cars
+                waddch(win, ch);
+                wattroff(win, COLOR_PAIR(2)); // Reset color
+            } else {
+                waddch(win, ch); // Default character
+            }
+        }
+    }
+    wrefresh(win); // Refresh to display changes
+}
+
+void drawBoard(GameConfig config, char* buffer) {
+    // draw borders
+    for (int x = 0; x < config.c; x++) {
+        buffer[x] = '#'; // Top border
+        buffer[(2 * config.r) * config.c + x] = '#'; // bottom border
+    }
+    for (int y = 0; y < 2 * config.r + 1; y++) {
+        buffer[y * config.c] = '#'; // Left border
+        buffer[y * config.c + config.c - 1] = '#'; // right border
+    }
+    for (int y = 2; y < (2 * config.r); y += 2) {
+        for (int x = 1; x < config.c - 1; x++) {
+            buffer[y * config.c + x] = '-';        // draw lanes
+        }
+    }
+}
+
+void drawStatus(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+    werase(status_win);  // clear the status menu
+    box(status_win, 0, 0);  // redraw the border
+    mvwprintw(status_win, 1, 1, "Timer: %d s | Score: %d | Lives: %d", elapsedTime, frog.score, frog.lives);
+    wrefresh(status_win);  // refresh to display updates
+}
+
+void frogLost(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+    werase(status_win);  // clear the status menu
+    box(status_win, 0, 0);  // redraw the border
+    mvwprintw(status_win, 1, 1, "Game over! Final score: %d", frog.score);
+    wrefresh(status_win);  // refresh to display updates
+}
+
+void hitStatus(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+    werase(status_win);  // clear the status menu
+    box(status_win, 0, 0);  // redraw the border
+    mvwprintw(status_win, 1, 1, "Frog hit! Lives left: %d", frog.lives);
+    wrefresh(status_win);  // refresh to display updates
+}
+
+void outTime(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+    werase(status_win);  // clear the status menu
+    box(status_win, 0, 0);  // redraw the border
+    mvwprintw(status_win, 1, 1, "Out of time! Final score: %d", frog.score);
+    wrefresh(status_win);  // refresh to display updates
+}
+
+void frogFin(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+    werase(status_win);  // clear the status menu
+    box(status_win, 0, 0);  // redraw the border
+    mvwprintw(status_win, 1, 1, "You've reached the finish line! Score: %d", frog.score);
+    wrefresh(status_win);  // refresh to display updates
+}
+
+void quitGame(WINDOW* status_win, GameConfig config, Frog frog) {
+    werase(status_win);  // clear the status menu
+    box(status_win, 0, 0);  // redraw the border
+    mvwprintw(status_win, 1, 1, "You've decided to quit. Score: %d", frog.score);
+    wrefresh(status_win);  // refresh to display updates
+}
+
 void drawCars(char* buffer, Car* cars, GameConfig config) {
     for (int i = 0; i < config.numCars; i++) {
         buffer[cars[i].row * config.c + cars[i].cx] = cars[i].symbol; // 'C' represents the car
     }
 }
 
-void drawBoard(GameConfig config, char* buffer){
-    for (int x = 0; x < config.c; x++) { // rows
-            buffer[x] = '#';
-            buffer[2 * config.r * config.c + x] = '#';
-        }
-        for (int y = 0; y < 2 * config.r + 1; y++) { // columns
-            buffer[y * config.c] = '#';
-            buffer[y * config.c + config.c - 1] = '#';
-        }
-        // draw lanes
-        for (int y = 2; y < (2 * config.r); y += 2) {
-            for (int x = 1; x < config.c - 1; x++) {
-                buffer[y * config.c + x] = '-';
-            }
-        }
-}
-
-int randDisCar(int elapsedTime, GameConfig config){
-    int dis;
-    if(elapsedTime % 5 == 0 && elapsedTime > 0){
-        dis = getRandom(config.numCars, 0);
-    }
-    return dis;
-}
-
 void frogInitPos(GameConfig config, Frog* frog){
         frog->x = config.c / 2;
         frog->y = 2 * config.r - 1;
+        frog->shape = '@';
+        
 }
 
 void initCarParams(Car* cars, GameConfig config){
@@ -320,167 +364,128 @@ void initCarParams(Car* cars, GameConfig config){
     for(int i=0; i<config.numCars; i++){
         cars[i].disapeared=0;
         cars[i].cx = 1;
+        cars[i].symbol = 'C';
     }
 }
 
-int timeEnd(GameConfig config, Frog frog, int elapsedTime){
-    // if the time reaches the limit - end the game
-    if (elapsedTime == config.maxTime) {
-        gotoxy(0, 2 * config.r + 3);
-        printf("Out of time! Your score is: %d", frog.score);
-        Sleep(2000);
-        return 1;
-    }
-    else{
-        return 0;
-    }
+void newPos(GameConfig config, Frog frog, char *buffer){
+    buffer[frog.y * config.c + frog.x] = frog.shape;
 }
 
-int frogWin(Frog frog, GameConfig config, time_t* startTime){
-    if (frog.y - 1 == 0) {
-        frog.score += 1;
-        gotoxy(0, 2 * config.r + 3);
-        printf("You won! Your score is: %d", frog.score);
-        Sleep(2000);
-        *startTime += 2;
-        // goto repeat;
-        return 1;
-    }
-    else{
-        return 0;
-    }
-}
+void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car *cars){
+    time_t startTime = time(NULL); 
+    srand(time(NULL)); // ? seeding
+    initCars(cars, config);
+        // initial frog position at the centre of the bottom line
+    frogInitPos(config, frog);
 
-void EndGame()						// sth at the end
-{
-	system("cls");
-	for(int i = QUIT_TIME; i > 0; i--)
-	{
-        gotoxy(2,2);
-		printf("Closing the game in %d seconds...",i);
-		Sleep(1000);
-	}
-}
+    initCarParams(cars, config); // initial car parameters
+    int dis;
 
-int kbInput(Frog* frog, GameConfig config){
-        char action;
-        // check for user input
-        if (_kbhit()) {
-            action = _getch();
-            if (action == 'x') {
-                return 0;
-            }
 
-            // move the player based on input
+    // input handling
+    nodelay(windows.game_win, TRUE);
+    int action; // get user input
+    
+    while((action = wgetch(windows.game_win)) != QUIT){
+        if (action != ERR) { // if a key is pressed     
+            // move the frog based on input
             if ((action == 'w' || action == 'W') && frog->y - 1 != 0) frog->y--;
             if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r) frog->y++;
             if ((action == 'a' || action == 'A') && frog->x - 1 != 0) frog->x--;
             if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1) frog->x++;
         }
-        return 1;
-}
-
-
-void drawPlayer(char* buffer, GameConfig config, Frog frog){
-    // draw the player's new position
-    buffer[frog.y * config.c + frog.x] = frog.shape;
-}
-
-int playerLost(GameConfig config, Frog *frog, char *buffer, Car *cars, time_t *startTime){
-    frog->lives -= 1;
-    if (frog->lives == 0) {
-        gotoxy(0, 2 * config.r + 3);
-        printf("You lost. Your score was: %d", frog->score);
-        Sleep(2000);
-        free(buffer);
-        free(cars); 
-        return 0;
-    }
-    gotoxy(0, 2 * config.r + 3);
-    printf("Frog got ran over:( Try again. Lives remaining: %d", frog->lives);
-    Sleep(2000);
-    startTime += 2;
-    return 1;
-}
-
-void initC(Car* cars, GameConfig config){
-    for(int i=0; i<config.numCars; i++){
-        cars[i].symbol = 'C';
-    }
-}
-
-int mainLoop(Car* cars, char* buffer, GameConfig config, Frog* frog, time_t* startTime){
-    int dis;
-    frogInitPos(config, frog);
-    initC(cars, config);
-    initCarParams(cars, config);
-    initCars(cars, config);
-    system("cls");
-    srand(time(NULL));
-    while(1){
-        
+        napms(10);
         clearBuffer(buffer, config);
 
         time_t currentTime = time(NULL);
-        int elapsedTime = difftime(currentTime, *startTime);
-        dis = randDisCar(elapsedTime, config);
-
-        if(timeEnd(config, *frog, elapsedTime) == 1) break;
-
-        drawBoard(config, buffer);
-        drawPlayer(buffer, config, *frog);
-        updateCars(cars, config, dis);
-        drawCars(buffer, cars, config);
-        drawScreen(buffer, config);
-        drawStatus(elapsedTime, config, *frog);
-
-        if(frogWin(*frog, config, startTime) == 1) mainLoop(cars, buffer, config, frog, startTime); // ???? new goto if 1?
-
-        if(kbInput(frog, config) == 0){
-            gotoxy(0, 2 * config.r + 3);
-            printf("You have decided to quit the game");
+        int elapsedTime = difftime(currentTime, startTime);
+        
+        if(elapsedTime % DIS_INT == 0 && elapsedTime > 0){
+            dis = getRandom(config.numCars, 0);
+        }
+        // if the time reaches the limit - end the game
+        if (elapsedTime == config.maxTime) {
+            outTime(windows.status_win, config, *frog, elapsedTime);
+            napms(2000);
+            break;
         }
 
-        if(frogHit(cars, config, frog, buffer, startTime)==1) break;
-        else mainLoop(cars, buffer, config, frog, startTime);
-    }
-}
-int main() {
-    GameConfig config;
-    GameConfig* cnfptr = &config;
-    loadConfig(cnfptr, "config.txt");   
-    char* buffer = (char*)malloc((2 * config.r + 1) * config.c * sizeof(char));
+        drawBoard(config, buffer); // draw the border
 
+        newPos(config, *frog, buffer); // draw the player's new position
+        updateCars(cars, config, dis);
+        drawCars(buffer, cars, config);
+
+        drawBuffer(windows.game_win, buffer, config); // draw the map to the screen
+        
+        drawStatus(windows.status_win, config, *frog, elapsedTime); // draw the box status
+
+        if (frog->y - 1 == 0) { // finisl line
+            frog->score += 1;
+            frogFin(windows.status_win, config, *frog, elapsedTime);
+            napms(2000);
+            startTime += 2;
+            frogInitPos(config, frog);
+            initCars(cars, config); 
+        }
+
+        int hit_result = frogHit(cars, config, frog, buffer, windows.game_win);
+        if(hit_result == 1){
+            frogLost(windows.status_win, config, *frog, elapsedTime);   
+            napms(2000); // wait for 2 seconds
+            
+            break;            
+        }
+        else if(hit_result == 2){
+            hitStatus(windows.status_win, config, *frog, elapsedTime);   
+            napms(2000);
+            startTime += 2;
+            frogInitPos(config, frog);
+            initCars(cars, config);
+        }
+    }
+    quitGame(windows.status_win, config, *frog);
+}
+
+int main() {
+    Frog frog;
+    GameConfig config;
+    loadConfig(&config, "config.txt");
+    frog.lives = config.frogLives;
+
+    char* buffer = createBuffer(config);
+
+    initscr(); // initialize ncurses
+    cbreak();
+    noecho();
+    start_color(); // enable colors
+    init_pair(1, COLOR_GREEN, COLOR_BLACK); // frog color
+    init_pair(2, COLOR_RED, COLOR_BLACK);   // car color
+    
+    Windows windows = initWindows(config);    
+    keypad(windows.game_win,TRUE);
+    refresh();
+    if (!windows.game_win) {
+    fprintf(stderr, "Failed to create window.\n");
+    endwin();
+    exit(1);
+    }   
+   
     const int MIN_SPEED = 1;
     const int MAX_SPEED = config.c - 2;
 
+
     Car* cars = (Car*)malloc(config.numCars * sizeof(Car));
 
-    setSpeed(cars, config, MIN_SPEED, MAX_SPEED);
+    setSpeed(cars, config, MIN_SPEED, MAX_SPEED); // setting initial car speed
     
-    Frog frog;
-    // game.maxTime = 60;
-    frog.shape = '@';
-    frog.lives = 5;
-    frog.score = 0;
-    char action;
-    time_t startTime = time(NULL);
-    
-    mainLoop(cars, buffer, config, &frog, &startTime);
+    mainLoop(windows, buffer, config, &frog, cars);
+
     free(buffer);
     free(cars);
 
+    endwin(); // end ncurses session
+
     return 0;
 }
-
-// cleared unnecessary comments
-// task: figure out a proper way for handling speed - 1 can't be the limit
-// config file update: add:
-// frogShape, frog and car color
-// if numCars > numLanes -> error
-// when lost print that lives 0
-// when time is out print maxtime/maxtime
-
-// other game goals:
-// add obstacles
-// add friendly cars
