@@ -12,6 +12,7 @@
 #define SPEED_INT      5   // speed changing interval in seconds
 #define SPEED_RANGE    2   // speed changing range
 #define STOP_NUM       2   // amount of cars that will stop near the frog
+#define JUMP_BREAK     0.1 // break in seconds between frog jumps
 
 typedef struct {
     int r;          // number of rows in the playing area
@@ -96,6 +97,7 @@ typedef struct {
     int lives;    // number of lives the frog has
     int score;    // player's score
     char symbol;
+    struct timespec lastMove;
 } Frog;
 
 typedef struct {
@@ -519,15 +521,27 @@ void newPos(GameConfig config, Frog frog, char *buffer){
     buffer[frog.y * config.c + frog.x] = frog.symbol;
 }
 
+// function to calculate elapsed time in milliseconds
+long getElapsedTime(struct timespec start, struct timespec end) {
+    return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
+}
+
 void moveFrog(Frog *frog, GameConfig config, int action, Obstacle *obs){
-    if (action != ERR) { // if a key is pressed     
-            // move the frog based on input
-            if ((action == 'w' || action == 'W') && frog->y - 1 != 0 && frogObs(frog, obs, frog->x, frog->y - 1)) frog->y--;
-            if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r && frogObs(frog, obs, frog->x, frog->y + 1)) frog->y++;
-            if ((action == 'a' || action == 'A') && frog->x - 1 != 0 && frogObs(frog, obs, frog->x - 1, frog->y)) frog->x--;
-            if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1 && frogObs(frog, obs, frog->x + 1, frog->y)) frog->x++;
+    struct timespec currentTime;
+    clock_gettime(CLOCK_MONOTONIC, &currentTime); // Get high-resolution time
+
+    if (getElapsedTime(frog->lastMove, currentTime) >= JUMP_BREAK*1000) {
+        if (action != ERR) { // if a key is pressed     
+                // move the frog based on input
+                if ((action == 'w' || action == 'W') && frog->y - 1 != 0 && frogObs(frog, obs, frog->x, frog->y - 1)) frog->y--;
+                if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r && frogObs(frog, obs, frog->x, frog->y + 1)) frog->y++;
+                if ((action == 'a' || action == 'A') && frog->x - 1 != 0 && frogObs(frog, obs, frog->x - 1, frog->y)) frog->x--;
+                if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1 && frogObs(frog, obs, frog->x + 1, frog->y)) frog->x++;
+            frog->lastMove = currentTime;
         }
-        napms(10);
+    }
+
+    napms(10);
 }
 
 void initFunc(GameConfig config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, const int MAX_SPEED, const int MIN_SPEED){
@@ -614,6 +628,7 @@ void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car 
     const int MIN_SPEED = 1;
     const int MAX_SPEED = config.c - 2;
     time_t startTime = time(NULL); 
+    // frog->lastMove = startTime;
     srand(time(NULL)); // seeding
     
     initFunc(config, cars, frog, obs, num_obs, MAX_SPEED, MIN_SPEED);
@@ -646,22 +661,6 @@ void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car 
         }
         
         drawing(windows, config, cars, frog, buffer, dis, obs, elapsedTime);
-
-        // if (frog->y - 1 == 0) { // when frog gets to the finish line
-        //     frogFin(windows, config, cars, frog, &startTime, elapsedTime, MIN_SPEED, MAX_SPEED);
-        //     obsR(&obs, config);
-        // }
-
-        // int hit_result = frogHit(cars, config, frog, buffer, windows.game_win);
-        // if(hit_result == 1){
-        //     frogLostMes(windows.status_win, config, *frog, elapsedTime);   
-        //     lost = 1; // flag so that quitGame() menu wont show
-        //     break;            
-        // }
-        // else if(hit_result == 2){
-        //     frogHitFunc(windows, config, frog, cars, elapsedTime, MIN_SPEED, MAX_SPEED, &startTime);
-        //     obsR(&obs, config);
-        // }
         handleFrogState(windows, frog, config, cars, &startTime, elapsedTime, &obs, buffer, &lost);
     }
     if(lost == 0){
@@ -683,6 +682,10 @@ int main() {
 
     int num_obs = getRandom(config.r-1, 1);
     Obstacle* obs = (Obstacle*) malloc(num_obs*sizeof(Obstacle));
+
+    struct timespec currentTime;
+    clock_gettime(CLOCK_MONOTONIC, &currentTime); 
+    frog.lastMove = currentTime;
 
     initscr(); // initialize ncurses
     curs_set(0);
