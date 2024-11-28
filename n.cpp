@@ -65,6 +65,7 @@ void loadConfig(GameConfig* config, const char* filename) {
     fclose(file);
 }
 
+
 typedef struct {
     WINDOW* game_win;   // main game window
     WINDOW* status_win; // status menu window
@@ -80,6 +81,17 @@ Windows initWindows(GameConfig config) {
     box(windows.status_win, 0, 0); // draw a border for the status menu
     refresh();
     return windows;
+}
+
+void saveScore(Windows windows, const char *filename, int score) {
+    FILE *file = fopen(filename, "a");
+    if (file == NULL) {
+        mvwprintw(windows.error_win, 0, 0, "Failed to opent the scores file!");
+        wrefresh(windows.error_win);
+        return;
+    }
+    fprintf(file, "%d\n", score);
+    fclose(file);
 }
 
 // struct for cars, with parameters: row - cars w, cx - cars x coordinate, speed - cars speed
@@ -345,15 +357,15 @@ void stopCarGen(Windows windows, Car *cars, Frog frog, GameConfig config){ // ge
             cars[car].prev_speed = cars[car].speed;
             cars[car].carStopped = 1;
         }
-        if(STOP_NUM > config.numCars){
+    } 
+    if(STOP_NUM > config.numCars){
             mvwprintw(windows.error_win, 0, 0, "STOP_NUM exceeds numCars!");
             wrefresh(windows.error_win);
         }
-        if(STOP_NUM >= config.numCars - 2){
-            mvwprintw(windows.error_win, 0, 0, "no STOP_NUM amount of free cars!");
-            wrefresh(windows.error_win);
-        }
-    } 
+    if(STOP_NUM >= config.numCars - 2){
+        mvwprintw(windows.error_win, 0, 0, "no STOP_NUM amount of free cars!");
+        wrefresh(windows.error_win);
+    }
 }       
         
 void stopCar(Car *cars, Frog frog, GameConfig config){
@@ -376,7 +388,7 @@ void fCarGen(Windows windows, Car *cars, Frog frog, GameConfig config){ // gener
             while(1){
                 
                 car = getRandom(config.numCars-1, 0);
-                if(cars[car].friendly == 0) break;
+                if(!cars[car].friendly && !cars[car].carStopped) break;
             }
             cars[car].friendly = 1;
         }
@@ -639,13 +651,9 @@ void moveFrog(Frog *frog, GameConfig config, int action, Obstacle *obs){
 void initFunc(Windows windows, GameConfig config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, const int MAX_SPEED, const int MIN_SPEED){
     setSpeed(cars, config, MIN_SPEED, MAX_SPEED); // setting initial car speeds
     initCars(cars, config);
-    // initial frog position at the centre of the bottom line
     initFrog(config, frog);
-
     initCarParams(cars, config); // initial car parameters
-    
     initObs(config, obs, num_obs); // initialize obstacle parameters
-
     stopCarGen(windows, cars, *frog, config); // generate car id's which will be stopping
     fCarGen(windows, cars, *frog, config);    // generate friendly car id's
 }
@@ -685,6 +693,7 @@ void frogHitFunc(Windows windows, GameConfig config, Frog *frog, Car *cars, doub
     initCars(cars, config);
     initCarParams(cars, config);
     stopCarGen(windows, cars, *frog, config);
+    fCarGen(windows, cars, *frog, config);
     setSpeed(cars, config, MIN_SPEED, MAX_SPEED);
 }
 
@@ -764,6 +773,7 @@ void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car 
     free(buffer);
     free(cars);
     free(obs);
+    free(config.carSpeeds); // ?
 }
 
 int main() {
@@ -804,7 +814,7 @@ int main() {
     Car* cars = (Car*)malloc(config.numCars * sizeof(Car));
     
     mainLoop(windows, buffer, config, &frog, cars, obs, num_obs);
-
+    saveScore(windows, "scores.txt", frog.score);
     endwin(); // end ncurses session
 
     return 0;
