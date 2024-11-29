@@ -11,9 +11,10 @@
 #define DIS_INT        3   // car disappearing interval in seconds
 #define SPEED_INT      5   // speed changing interval in seconds
 #define SPEED_RANGE    2   // speed changing range
-#define STOP_NUM       2   // amount of cars that will stop near the frog
-#define FRIEND         1   // amount friendly taxi cars
+#define STOP_NUM       1   // amount of cars that will stop near the frog
+#define FRIEND         2   // amount friendly taxi cars
 #define JUMP_BREAK     0.1 // break in seconds between frog jumps
+#define TOP_DISPLAY    5   // amount of top scores to display in the ranking
 
 typedef struct {
     int r;          // number of rows in the playing area
@@ -100,7 +101,7 @@ int countScores(Windows windows, const char *filename) {
     if (file == NULL) {
         mvwprintw(windows.error_win, 0, 0, "Failed to opent the scores file!");
         wrefresh(windows.error_win);
-        return;
+        return 1;
     }
 
     int temp;
@@ -113,7 +114,8 @@ int countScores(Windows windows, const char *filename) {
 }
 
 void sortScores(int *scores, int scoreCount) {
-    for (int i = 0; i < scoreCount - 1; i++) {
+    // sort scores in descending order
+    for (int i = 0; i < scoreCount-1 - 1; i++) {
         for (int j = i + 1; j < scoreCount; j++) {
             if (scores[i] < scores[j]) {
                 int temp = scores[i];
@@ -129,11 +131,10 @@ void displayTopScores(Windows windows, const char *filename){
     int scoreCount = countScores(windows, filename);
     int *scores = (int *)malloc(scoreCount * sizeof(int));
     if (scores == NULL) {
-        fprintf(stderr, "malloc failed for 'scores'.\n");
         endwin();
         exit(1);
     }
-
+    
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         mvwprintw(windows.error_win, 0, 0, "Failed to opent the scores file!");
@@ -141,12 +142,35 @@ void displayTopScores(Windows windows, const char *filename){
         free(scores); 
         return;
     }
-
+    
+    // put elements into scores array
     for (int i = 0; i < scoreCount; i++) {
-        fscanf(file, "%d", scores[i]);
-
+        fscanf(file, "%d", &scores[i]);
+        // werase(windows.game_win);       // Clears content of the window
+        // wrefresh(windows.game_win);     // Refreshes to show the cleared window
+        // mvwprintw(windows.game_win, 2, 2, "%d", scores[i]);
+        // wrefresh(windows.game_win);
+        // getchar();
     }
 
+    sortScores(scores, scoreCount);
+    // clear the window
+    werase(windows.game_win);       // clears content of the window
+    wrefresh(windows.game_win);     // refreshes to show the cleared window
+    // print a title
+    mvwprintw(windows.game_win, 1, 1, "Top %d Scores:", TOP_DISPLAY);
+    int last;
+    // display scores
+    for (int i = 0; i < TOP_DISPLAY; i++) {
+        mvwprintw(windows.game_win, i + 2, 1, "%d. %d", i + 1, scores[i]);
+    }
+
+    mvwprintw(windows.game_win, TOP_DISPLAY+2, 1, "press any character to exit.");
+
+    // refresh the window to show the changes
+    wrefresh(windows.game_win);
+    getchar();
+    free(scores);
 }
 
 // struct for cars, with parameters: row - cars w, cx - cars x coordinate, speed - cars speed
@@ -700,7 +724,7 @@ void moveFrog(Frog *frog, GameConfig config, int action, Obstacle *obs){
             frog->lastMove = currentTime;
         }
     }
-
+    
     napms(10);
 }
 
@@ -871,6 +895,7 @@ int main() {
     
     mainLoop(windows, buffer, config, &frog, cars, obs, num_obs);
     saveScore(windows, "scores.txt", frog.score);
+    displayTopScores(windows, "scores.txt");
     endwin(); // end ncurses session
 
     return 0;
