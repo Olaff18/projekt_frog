@@ -94,6 +94,61 @@ void saveScore(Windows windows, const char *filename, int score) {
     fclose(file);
 }
 
+int countScores(Windows windows, const char *filename) {
+    int count = 0;
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        mvwprintw(windows.error_win, 0, 0, "Failed to opent the scores file!");
+        wrefresh(windows.error_win);
+        return;
+    }
+
+    int temp;
+    while (fscanf(file, "%d", &temp) == 1) {
+        count++;
+    }
+
+    fclose(file);
+    return count;
+}
+
+void sortScores(int *scores, int scoreCount) {
+    for (int i = 0; i < scoreCount - 1; i++) {
+        for (int j = i + 1; j < scoreCount; j++) {
+            if (scores[i] < scores[j]) {
+                int temp = scores[i];
+                scores[i] = scores[j];
+                scores[j] = temp;
+            }
+        }
+    }
+}
+
+void displayTopScores(Windows windows, const char *filename){
+    int n; // number of scores in the file
+    int scoreCount = countScores(windows, filename);
+    int *scores = (int *)malloc(scoreCount * sizeof(int));
+    if (scores == NULL) {
+        fprintf(stderr, "malloc failed for 'scores'.\n");
+        endwin();
+        exit(1);
+    }
+
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        mvwprintw(windows.error_win, 0, 0, "Failed to opent the scores file!");
+        wrefresh(windows.error_win);
+        free(scores); 
+        return;
+    }
+
+    for (int i = 0; i < scoreCount; i++) {
+        fscanf(file, "%d", scores[i]);
+
+    }
+
+}
+
 // struct for cars, with parameters: row - cars w, cx - cars x coordinate, speed - cars speed
 typedef struct {
     int row;
@@ -608,6 +663,7 @@ void initCarParams(Car* cars, GameConfig config){
         cars[i].cx = 1;
         cars[i].symbol = config.carSymbol;
         cars[i].carBounce = 0;
+        cars[i].friendly = 0;
     }
 }
 
