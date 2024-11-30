@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
-
+// dodaj imie i nr w statusie + okno jumpcount i punkty? + stork
 #define DISAPPEAR_WAIT 2   // cooldown after car disappearing
 #define QUIT_TIME	   3   // .. seconds to quit
 #define WAIT_TIME      2   // time to wait during the message
@@ -29,10 +29,10 @@ typedef struct {
     char carColor[10];
     int frogLives;
     int dis_am;
-} GameConfig;
+} Config;
 
 // function for opening the file and loading the data into the config struct
-void loadConfig(GameConfig* config, const char* filename) {
+void loadConfig(Config* config, const char* filename) {
     FILE* file = fopen(filename, "r");
     if (!file) {
         fprintf(stderr, "Error opening config file");
@@ -71,17 +71,39 @@ typedef struct {
     WINDOW* game_win;   // main game window
     WINDOW* status_win; // status menu window
     WINDOW* error_win; // error window for showing non-fatal errors, for fatal errors I use exit(1)
+    WINDOW* bonus_win; // window for jumpcount and bonus points
 } Windows;
 
 // initialize windows
-Windows initWindows(GameConfig config) {
+Windows initWindows(Config config) {
     Windows windows;
-    windows.game_win = newwin(2 * config.r + 1, config.c, 0, 0);
-    windows.status_win = newwin(3, config.c, 2 * config.r + 1, 0);
-    windows.error_win = newwin(3, config.c, 2 * config.r + 4, 0);
+    windows.game_win = newwin(2*config.r + 1, config.c, 0, 0);
+    windows.status_win = newwin(5, config.c, 0, config.c+1);
+    windows.error_win = newwin(1, config.c, 2*config.r + 1, 0);
+    windows.bonus_win = newwin(1, config.c, 5, config.c+1);
     box(windows.status_win, 0, 0); // draw a border for the status menu
     refresh();
     return windows;
+}
+
+// check if terminal fits
+void sizeErr(Config config){
+    int r, c;
+    int requiredRows = 2*config.r + 7;
+    int requiredCols = config.c;
+    getmaxyx(stdscr, r, c);
+    if (r < requiredRows || c < requiredCols) {
+        // if terminal size is smaller than the required size
+        printw("Error: Terminal window is too small to display the game map.\n");
+        printw("Required size: %d rows x %d columns\n", requiredRows, requiredCols);
+        printw("Current size: %d rows x %d columns\n", r, c);
+        refresh();
+        // wait for user input before exiting
+        getchar();
+        endwin();
+        exit(1);  
+    }
+
 }
 
 void saveScore(Windows windows, const char *filename, int score) {
@@ -114,7 +136,7 @@ int countScores(Windows windows, const char *filename) {
 }
 
 void sortScores(int *scores, int scoreCount) {
-    // sort scores in descending order
+    // sort scores in descending order with bubble sort
     for (int i = 0; i < scoreCount-1 - 1; i++) {
         for (int j = i + 1; j < scoreCount; j++) {
             if (scores[i] < scores[j]) {
@@ -131,13 +153,17 @@ void displayTopScores(Windows windows, const char *filename){
     int scoreCount = countScores(windows, filename);
     int *scores = (int *)malloc(scoreCount * sizeof(int));
     if (scores == NULL) {
+        printw("Error with scores pointer");
+        refresh();
+        // wait for user input before exiting
+        getchar();
         endwin();
-        exit(1);
+        exit(1); 
     }
     
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        mvwprintw(windows.error_win, 0, 0, "Failed to opent the scores file!");
+        mvwprintw(windows.error_win, 0, 1, "Failed to opent the scores file!");
         wrefresh(windows.error_win);
         free(scores); 
         return;
@@ -146,17 +172,14 @@ void displayTopScores(Windows windows, const char *filename){
     // put elements into scores array
     for (int i = 0; i < scoreCount; i++) {
         fscanf(file, "%d", &scores[i]);
-        // werase(windows.game_win);       // Clears content of the window
-        // wrefresh(windows.game_win);     // Refreshes to show the cleared window
-        // mvwprintw(windows.game_win, 2, 2, "%d", scores[i]);
-        // wrefresh(windows.game_win);
-        // getchar();
     }
 
     sortScores(scores, scoreCount);
     // clear the window
-    werase(windows.game_win);       // clears content of the window
-    wrefresh(windows.game_win);     // refreshes to show the cleared window
+    werase(windows.game_win);       
+    wrefresh(windows.game_win); 
+    werase(windows.bonus_win);       
+    wrefresh(windows.bonus_win);     
     // print a title
     mvwprintw(windows.game_win, 1, 1, "Top %d Scores:", TOP_DISPLAY);
     int last;
@@ -199,6 +222,7 @@ typedef struct {
     struct timespec lastMove;
     int ride;     // checking if the frog is ready to ried a friendly car
     int is_riding;// checking if the frog is currently riding a friendly car
+    int jumpCount;
 } Frog;
 
 typedef struct {
@@ -207,6 +231,17 @@ typedef struct {
     int y;
     int numObs;
 } Obstacle;
+
+void bonus(Windows windows, int flag, Config config, Frog *frog){
+    mvwprintw(windows.bonus_win, 0, 1, "Jumps: %d", frog->jumpCount);
+    if(flag == 1){
+        if(frog->jumpCount <= 3*config.r){
+            mvwprintw(windows.bonus_win, 0, 11, " | Bonus point for jumps!");
+            frog->score += 1;
+        }
+    }
+    wrefresh(windows.bonus_win);
+}
 
 // function for generating a random row, with the step = 2, so the values are only odd
 int getRandomStep(int max_value, int min_value, int step) {
@@ -220,7 +255,7 @@ int getRandom(int max_value, int min_value) {
     return random_value;
 }
 
-void row(Car* cars, GameConfig config, int *i, int *rrow, int *flag_in, int *crows){
+void row(Car* cars, Config config, int *i, int *rrow, int *flag_in, int *crows){
     int attempts = 0;
     if (&i == 0) {
             int rrow = getRandomStep(2 * config.r - 1, 1, 2); // if its the first car, we assign it a row (with a odd y coordinate, because road/lane can only have such)
@@ -244,18 +279,12 @@ void row(Car* cars, GameConfig config, int *i, int *rrow, int *flag_in, int *cro
                     *flag_in = 1;
 
                 }
-                // attempts++;
-                // if (attempts > config.r) {
-                //     fprintf(stderr, "Failed to find a row\n");
-                //     break;
-                //     return; 
-                // }
             }
         }
 }
 
 // initializing the cars and its parameters
-void initCars(Car* cars, GameConfig config) { 
+void initCars(Car* cars, Config config) { 
     
     // dynamic 1D array, for storing the rows of cars that had been already used, so they don't repeat
     int* crows = (int*)malloc(config.numCars * sizeof(int));
@@ -277,10 +306,10 @@ void initCars(Car* cars, GameConfig config) {
 
 
 // setting the initial speed for the cars
-void setSpeed(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED){
+void setSpeed(Car *cars, Config config, int min_sp, int max_sp){
     for(int i = 0; i<config.numCars; i++){       
-        if(config.carSpeeds[i] < MIN_SPEED) cars[i].speed = MIN_SPEED; // if set car speed is below the minimum allowed speed, set it to the minimum allowed speed
-        else if(config.carSpeeds[i] > MAX_SPEED) cars[i].speed = MAX_SPEED; // if set car speed is over the maximum allowed speed, set it to the maximum allowed speed
+        if(config.carSpeeds[i] < min_sp) cars[i].speed = min_sp; // if set car speed is below the minimum allowed speed, set it to the minimum allowed speed
+        else if(config.carSpeeds[i] > max_sp) cars[i].speed = max_sp; // if set car speed is over the maximum allowed speed, set it to the maximum allowed speed
         else {
             cars[i].speed = config.carSpeeds[i]; 
             cars[i].prev_speed = config.carSpeeds[i];
@@ -288,7 +317,7 @@ void setSpeed(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED){
     }
 }
 
-void carDisBeh(Car *cars, GameConfig *config, struct timespec start_time, int i, int dis){
+void carDisBeh(Car *cars, Config *config, struct timespec start_time, int i, int dis){
     if(i == dis){ // if car happens to be disappeared, change its parameters
         struct timespec time;
         clock_gettime(CLOCK_MONOTONIC, &time);
@@ -303,7 +332,7 @@ void carDisBeh(Car *cars, GameConfig *config, struct timespec start_time, int i,
     }
 }
 // logic for updating cars position, when its disappear parameter is set to 0
-void carDis0(Frog *frog, GameConfig *config, Car *cars, double elapsedTime, double current_time, struct timespec start_time, int i, int dis){
+void carDis0(Frog *frog, Config *config, Car *cars, double elapsedTime, double current_time, struct timespec start_time, int i, int dis){
     elapsedTime = current_time - cars[i].lastMove;
     double interval = 1000/cars[i].speed;
     if (elapsedTime >= interval) { // checking if the interval in ms is <= than elapsedTime, if it is, move the car by 1 column  
@@ -335,7 +364,7 @@ void carDis0(Frog *frog, GameConfig *config, Car *cars, double elapsedTime, doub
 
 
 // logic for updating cars position, when its disappear parameter is set to 1
-void carDis1(GameConfig *config, Car *cars, double elapsedTime, double current_time, int i){
+void carDis1(Config *config, Car *cars, double elapsedTime, double current_time, int i){
     int attempts = 0;
     elapsedTime = current_time - cars[i].disappearTime;
     if(elapsedTime >= DISAPPEAR_WAIT*1000){
@@ -375,7 +404,7 @@ void carDis1(GameConfig *config, Car *cars, double elapsedTime, double current_t
 }
 
 // updating cars position based on its last move
-void updateCars(Car* cars, GameConfig *config, Frog *frog, int dis) {
+void updateCars(Car* cars, Config *config, Frog *frog, int dis) {
     struct timespec start_time;
     clock_gettime(CLOCK_MONOTONIC, &start_time);
     // convert to a double representing milliseconds
@@ -391,7 +420,7 @@ void updateCars(Car* cars, GameConfig *config, Frog *frog, int dis) {
     }
 }
 
-void speedChange(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED, int elapsedTime){
+void speedChange(Windows windows, Car *cars, Config config, int min_sp, int max_sp, int elapsedTime){
     if(elapsedTime % DIS_INT == 0 && elapsedTime > 0){
         int car;
         int attempts = 0;
@@ -402,8 +431,10 @@ void speedChange(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED, int
 
             attempts++;
             if (attempts > config.numCars) {
-                fprintf(stderr, "Failed to find a car with non-zero speed.\n");
-                return; // Exit the function or handle gracefully
+                // fprintf(stderr, "Failed to find a car with non-zero speed.\n");
+                mvwprintw(windows.error_win, 0, 0, "Failed to find a car with non-zero speed.");
+                wrefresh(windows.error_win);
+                return; 
             }
         }while(cars[car].speed == 0); // to ensure that we dont move the car that stopped in front of the frog
         int speed_ch = 0;
@@ -418,13 +449,13 @@ void speedChange(Car *cars, GameConfig config, int MIN_SPEED, int MAX_SPEED, int
             }
         }while(speed_ch == 0); // to ensure that the speed change won't be = 0
         cars[car].speed += speed_ch;
-        if(cars[car].speed < MIN_SPEED) cars[car].speed = MIN_SPEED; // if set car speed is below the minimum allowed speed, set it to the minimum allowed speed
-        if(cars[car].speed > MAX_SPEED) cars[car].speed = MAX_SPEED; // if set car speed is over the maximum allowed speed, set it to the maximum allowed speed
+        if(cars[car].speed < min_sp) cars[car].speed = min_sp; // if set car speed is below the minimum allowed speed, set it to the minimum allowed speed
+        if(cars[car].speed > max_sp) cars[car].speed = max_sp; // if set car speed is over the maximum allowed speed, set it to the maximum allowed speed
         
     }
 }
 
-void stopCarGen(Windows windows, Car *cars, Frog frog, GameConfig config){ // generate STOP_NUM amount of stop cars
+void stopCarGen(Windows windows, Car *cars, Frog frog, Config config){ // generate STOP_NUM amount of stop cars
     int car;
     if(STOP_NUM < config.numCars-2){
         for(int i=0; i<STOP_NUM; i++){
@@ -447,7 +478,7 @@ void stopCarGen(Windows windows, Car *cars, Frog frog, GameConfig config){ // ge
     }
 }       
         
-void stopCar(Car *cars, Frog frog, GameConfig config){
+void stopCar(Car *cars, Frog frog, Config config){
     for(int i=0; i<config.numCars; i++){
         if(cars[i].carStopped == 1){
             if(frog.x - cars[i].cx <= 2 && frog.x - cars[i].cx >= 0 && cars[i].row == frog.y){
@@ -460,7 +491,7 @@ void stopCar(Car *cars, Frog frog, GameConfig config){
     }
 }
 
-void fCarGen(Windows windows, Car *cars, Frog frog, GameConfig config){ // generate FRIEND amount of stop cars
+void fCarGen(Windows windows, Car *cars, Frog frog, Config config){ // generate FRIEND amount of stop cars
     int car;
     if(FRIEND < config.numCars - STOP_NUM - 2){
         for(int i=0; i<FRIEND; i++){
@@ -482,7 +513,7 @@ void fCarGen(Windows windows, Car *cars, Frog frog, GameConfig config){ // gener
     }
 }  
 
-void fCar(Car *cars, Frog* frog, GameConfig config){
+void fCar(Car *cars, Frog* frog, Config config){
     for(int i=0; i<config.numCars; i++){
         if(cars[i].friendly == 1){
             if(frog->x == cars[i].cx && frog->y == cars[i].row && frog->ride){
@@ -499,17 +530,19 @@ void fCar(Car *cars, Frog* frog, GameConfig config){
 
 
 // function for checking if the frog was hit by a car
-int frogHit(Car *cars, GameConfig config, Frog* frog, char* buffer, WINDOW* win) {
+int frogHit(Car *cars, Config config, Frog* frog, char* buffer, WINDOW* win) {
             
     for (int i = 0; i < config.numCars; i++) {
 
         if (!cars || !frog) {
-        fprintf(stderr, "Invalid pointer: cars or frog is NULL.\n");
-        return -1;
+        printw("Invalid pointer: cars or frog is NULL");
+        endwin();
+        exit(1);
         }
         if (i < 0 || i >= config.numCars) {
-            fprintf(stderr, "Out of bounds access on cars array: i=%d\n", i);
-            return -1;
+            printw("Out of bounds access on cars array: i=%d\n", i);
+            endwin();
+            exit(1);
         }
 
         if (cars[i].cx == frog->x && cars[i].row == frog->y && !cars[i].disapeared && !cars[i].friendly){
@@ -525,11 +558,11 @@ int frogHit(Car *cars, GameConfig config, Frog* frog, char* buffer, WINDOW* win)
     return 0;
 }
 
-char* createBuffer(GameConfig config) {
+char* createBuffer(Config config) {
     return (char*)malloc((2 * config.r + 1) * config.c * sizeof(char));
 }
 
-void clearBuffer(char* buffer, GameConfig config) {
+void clearBuffer(char* buffer, Config config) {
     for (int y = 0; y < 2 * config.r + 1; y++) {
         for (int x = 0; x < config.c; x++) {
             buffer[y * config.c + x] = ' ';
@@ -537,7 +570,7 @@ void clearBuffer(char* buffer, GameConfig config) {
     }
 }
 
-void drawBuffer(WINDOW* win, char* buffer, GameConfig config, Car *cars) {
+void drawBuffer(WINDOW* win, char* buffer, Config config, Car *cars) {
     for (int y = 0; y < 2 * config.r + 1; y++) {
         for (int x = 0; x < config.c; x++) {
             char ch = buffer[y * config.c + x];
@@ -575,7 +608,7 @@ void drawBuffer(WINDOW* win, char* buffer, GameConfig config, Car *cars) {
     wrefresh(win); // Refresh to display changes
 }
 
-void drawBoard(GameConfig config, char* buffer) {
+void drawBoard(Config config, char* buffer) {
     // draw borders
     for (int x = 0; x < config.c; x++) {
         buffer[x] = '#'; // Top border
@@ -592,14 +625,15 @@ void drawBoard(GameConfig config, char* buffer) {
     }
 }
 
-void drawStatus(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+void drawStatus(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
     werase(status_win);  // clear the status menu
     box(status_win, 0, 0);  // redraw the border
     mvwprintw(status_win, 1, 1, "Timer: %d/%d s | Score: %d | Lives: %d", elapsedTime, config.maxTime, frog.score, frog.lives);
+    mvwprintw(status_win, 3, 1, "Michal Binek, 203726");
     wrefresh(status_win);  // refresh to display updates
 }
 
-void frogLostMes(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+void frogLostMes(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
     werase(status_win);  // clear the status menu
     box(status_win, 0, 0);  // redraw the border
     mvwprintw(status_win, 1, 1, "Game over! Final score: %d", frog.score);
@@ -607,7 +641,7 @@ void frogLostMes(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTi
     napms(WAIT_TIME*1000);
 }
 
-void hitStatus(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+void hitStatus(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
     werase(status_win);  // clear the status menu
     box(status_win, 0, 0);  // redraw the border
     mvwprintw(status_win, 1, 1, "Frog hit! Lives left: %d", frog.lives);
@@ -616,7 +650,7 @@ void hitStatus(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime
     
 }
 
-void outTimeMes(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+void outTimeMes(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
     werase(status_win);  // clear the status menu
     box(status_win, 0, 0);  // redraw the border
     mvwprintw(status_win, 1, 1, "Out of time! Final score: %d", frog.score);
@@ -624,7 +658,7 @@ void outTimeMes(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTim
     napms(WAIT_TIME*1000);
 }
 
-void frogFinMes(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTime) {
+void frogFinMes(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
     werase(status_win);  // clear the status menu
     box(status_win, 0, 0);  // redraw the border
     mvwprintw(status_win, 1, 1, "Finish line! Score: %d", frog.score);
@@ -632,7 +666,7 @@ void frogFinMes(WINDOW* status_win, GameConfig config, Frog frog, int elapsedTim
     napms(WAIT_TIME*1000);
 }
 
-void quitGameMes(WINDOW* status_win, GameConfig config, Frog frog) {
+void quitGameMes(WINDOW* status_win, Config config, Frog frog) {
     werase(status_win);  // clear the status menu
     box(status_win, 0, 0);  // redraw the border
     mvwprintw(status_win, 1, 1, "You've decided to quit. Score: %d", frog.score);
@@ -640,22 +674,26 @@ void quitGameMes(WINDOW* status_win, GameConfig config, Frog frog) {
     napms(QUIT_TIME*1000);
 }
 
-void drawCars(char* buffer, Car* cars, GameConfig config) {
+void drawCars(char* buffer, Car* cars, Config config) {
     for (int i = 0; i < config.numCars; i++) {
         buffer[cars[i].row * config.c + cars[i].cx] = cars[i].symbol; 
     }
 }
 
-void initFrog(GameConfig config, Frog* frog){
+void initFrog(Windows windows, Config config, Frog* frog){
         frog->x = config.c / 2;
         frog->y = 2 * config.r - 1;
         frog->symbol = config.frogSymbol;
         frog->is_riding = 0;
         frog->ride = 0;
-        
+        frog->jumpCount = 0;
+        werase(windows.error_win);       
+        wrefresh(windows.error_win); 
+        werase(windows.bonus_win);
+        wrefresh(windows.bonus_win);
 }
 
-void initObs(GameConfig config, Obstacle* obs, int num_obs){
+void initObs(Config config, Obstacle* obs, int num_obs){
     for(int i=0; i<num_obs; i++){
         obs[i].x = getRandom(config.c-2, 1); // x coordinate of an obstacle ranges between first place beside the border to the last one
         obs[i].y = getRandomStep(2*config.r-1, 2, 2); // y coordinate of an obstacle ranges between the 3rd x of the map, which is a first lane, and the last lane
@@ -664,7 +702,7 @@ void initObs(GameConfig config, Obstacle* obs, int num_obs){
     }
 }
 
-void drawObs(char *buffer, GameConfig config, Obstacle *obs){
+void drawObs(char *buffer, Config config, Obstacle *obs){
     for(int i=0; i<obs[0].numObs; i++){
         buffer[obs[i].y*config.c + obs[i].x] = obs[i].symbol;
     }
@@ -679,7 +717,7 @@ int frogObs(Frog* frog, Obstacle *obs, int newX, int newY){
     return 1; // valid move
 }
 
-void initCarParams(Car* cars, GameConfig config){
+void initCarParams(Car* cars, Config config){
     // cars init position and disappeared status
     for(int i=0; i<config.numCars; i++){
         cars[i].disapeared = 0;
@@ -691,7 +729,7 @@ void initCarParams(Car* cars, GameConfig config){
     }
 }
 
-void newPos(GameConfig config, Frog frog, char *buffer){
+void newPos(Config config, Frog frog, char *buffer){
     buffer[frog.y * config.c + frog.x] = frog.symbol;
 }
 
@@ -700,7 +738,7 @@ long getElapsedTime(struct timespec start, struct timespec end) {
     return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
 }
 
-void moveFrog(Frog *frog, GameConfig config, int action, Obstacle *obs){
+void moveFrog(Windows windows, Frog *frog, Config config, int action, Obstacle *obs){
     struct timespec currentTime;
     clock_gettime(CLOCK_MONOTONIC, &currentTime); // Get high-resolution time
 
@@ -716,10 +754,24 @@ void moveFrog(Frog *frog, GameConfig config, int action, Obstacle *obs){
                     }   
                 // move the frog based on input, if the frog is not riding a car
                 if(!frog->is_riding){
-                    if ((action == 'w' || action == 'W') && frog->y - 1 != 0 && frogObs(frog, obs, frog->x, frog->y - 1)) frog->y--;
-                    if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r && frogObs(frog, obs, frog->x, frog->y + 1)) frog->y++;
-                    if ((action == 'a' || action == 'A') && frog->x - 1 != 0 && frogObs(frog, obs, frog->x - 1, frog->y)) frog->x--;
-                    if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1 && frogObs(frog, obs, frog->x + 1, frog->y)) frog->x++;
+                    if ((action == 'w' || action == 'W') && frog->y - 1 != 0 && frogObs(frog, obs, frog->x, frog->y - 1)) {
+                        frog->y--; 
+                        frog->jumpCount+=1;
+                    }
+                    if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r && frogObs(frog, obs, frog->x, frog->y + 1)){
+                        frog->y++; 
+                        frog->jumpCount+=1;
+                    }
+                    if ((action == 'a' || action == 'A') && frog->x - 1 != 0 && frogObs(frog, obs, frog->x - 1, frog->y)){
+                        frog->x--; 
+                        frog->jumpCount+=1;
+                    }
+                    if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1 && frogObs(frog, obs, frog->x + 1, frog->y)){
+                        frog->x++; 
+                        frog->jumpCount+=1;
+                    }
+                    bonus(windows, 0, config, frog);
+
                 }
             frog->lastMove = currentTime;
         }
@@ -728,29 +780,30 @@ void moveFrog(Frog *frog, GameConfig config, int action, Obstacle *obs){
     napms(10);
 }
 
-void initFunc(Windows windows, GameConfig config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, const int MAX_SPEED, const int MIN_SPEED){
-    setSpeed(cars, config, MIN_SPEED, MAX_SPEED); // setting initial car speeds
+void initFunc(Windows windows, Config config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, int max_sp, int min_sp){
+    setSpeed(cars, config, min_sp, max_sp); // setting initial car speeds
     initCars(cars, config);
-    initFrog(config, frog);
+    initFrog(windows, config, frog);
     initCarParams(cars, config); // initial car parameters
     initObs(config, obs, num_obs); // initialize obstacle parameters
     stopCarGen(windows, cars, *frog, config); // generate car id's which will be stopping
     fCarGen(windows, cars, *frog, config);    // generate friendly car id's
 }
 
-void frogFin(Windows windows, GameConfig config, Car *cars, Frog *frog, time_t *startTime, double elapsedTime, const int MIN_SPEED, const int MAX_SPEED){
+void frogFin(Windows windows, Config config, Car *cars, Frog *frog, time_t *startTime, double elapsedTime, int min_sp, int max_sp){
     frog->score += 1;
+    bonus(windows, 1, config, frog);
     frogFinMes(windows.status_win, config, *frog, elapsedTime);
     *startTime += WAIT_TIME;
-    initFrog(config, frog);
+    initFrog(windows, config, frog);
     initCars(cars, config); 
     initCarParams(cars, config);
     stopCarGen(windows, cars, *frog, config);
     fCarGen(windows, cars, *frog, config);
-    setSpeed(cars, config, MIN_SPEED, MAX_SPEED);
+    setSpeed(cars, config, min_sp, max_sp);
 }
 
-void drawing(Windows windows, GameConfig config, Car *cars, Frog *frog, char *buffer, int dis, Obstacle *obs, double elapsedTime){
+void drawing(Windows windows, Config config, Car *cars, Frog *frog, char *buffer, int dis, Obstacle *obs, double elapsedTime){
         stopCar(cars, *frog, config);
         fCar(cars, frog, config);
         drawBoard(config, buffer); // draw the border
@@ -766,34 +819,35 @@ void drawing(Windows windows, GameConfig config, Car *cars, Frog *frog, char *bu
 
 }
 
-void frogHitFunc(Windows windows, GameConfig config, Frog *frog, Car *cars, double elapsedTime, const int MIN_SPEED, const int MAX_SPEED, time_t *startTime){
+void frogHitFunc(Windows windows, Config config, Frog *frog, Car *cars, double elapsedTime, int min_sp, int max_sp, time_t *startTime){
     hitStatus(windows.status_win, config, *frog, elapsedTime);   
     *startTime += WAIT_TIME;
-    initFrog(config, frog);
+    initFrog(windows, config, frog);
     initCars(cars, config);
     initCarParams(cars, config);
     stopCarGen(windows, cars, *frog, config);
     fCarGen(windows, cars, *frog, config);
-    setSpeed(cars, config, MIN_SPEED, MAX_SPEED);
+    setSpeed(cars, config, min_sp, max_sp);
 }
 
-void obsR(Obstacle **obs, GameConfig config){ // obstacle reallocation function
+void obsR(Obstacle **obs, Config config){ // obstacle reallocation function
     int num_obs = getRandom(config.r-1, 1); // new amount of obstacles
     Obstacle *new_obs = (Obstacle *)realloc(*obs, num_obs * sizeof(Obstacle));
     if (new_obs == NULL) {
-        // Handle realloc failure (optional: log error and return)
-        fprintf(stderr, "Memory reallocation failed\n");
-        return;  // or handle the error as necessary
+        // Handle realloc failure (
+        printw("Memory reallocation failed");
+        endwin();
+        exit(1);
     }
     *obs = new_obs;
     initObs(config, *obs, num_obs);
 }
 
-void handleFrogState(Windows windows, Frog *frog, GameConfig config, Car* cars, time_t *startTime, int elapsedTime, Obstacle **obs, char *buffer, int *lost){
-    const int MIN_SPEED = 1;
-    const int MAX_SPEED = config.c - 2;
+void handleFrogState(Windows windows, Frog *frog, Config config, Car* cars, time_t *startTime, int elapsedTime, Obstacle **obs, char *buffer, int *lost){
+    int min_sp = 1;
+    int max_sp = config.c - 2;
     if (frog->y - 1 == 0) { // when frog gets to the finish line
-            frogFin(windows, config, cars, frog, startTime, elapsedTime, MIN_SPEED, MAX_SPEED);
+            frogFin(windows, config, cars, frog, startTime, elapsedTime, max_sp, max_sp);
             obsR(obs, config);
         }
 
@@ -803,19 +857,18 @@ void handleFrogState(Windows windows, Frog *frog, GameConfig config, Car* cars, 
         *lost = 1; // flag so that quitGame() menu wont show
     }
     else if(hit_result == 2){
-        frogHitFunc(windows, config, frog, cars, elapsedTime, MIN_SPEED, MAX_SPEED, startTime);
+        frogHitFunc(windows, config, frog, cars, elapsedTime, min_sp, max_sp, startTime);
         obsR(obs, config);
     }
 }
 
-void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car *cars, Obstacle *obs, int num_obs){
-    const int MIN_SPEED = 1;
-    const int MAX_SPEED = config.c - 2;
+void mainLoop(Windows windows, char *buffer, Config config, Frog* frog, Car *cars, Obstacle *obs, int num_obs){
+    int min_sp= 1;
+    int max_sp = config.c - 2;
     time_t startTime = time(NULL); 
     // frog->lastMove = startTime;
-    srand(time(NULL)); // seeding
     
-    initFunc(windows, config, cars, frog, obs, num_obs, MAX_SPEED, MIN_SPEED);
+    initFunc(windows, config, cars, frog, obs, num_obs, max_sp, min_sp);
     nodelay(windows.game_win, TRUE);
     
     int dis;
@@ -823,7 +876,8 @@ void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car 
     int lost = 0; // a flag for checking if the frog lost
     
     while((action = wgetch(windows.game_win)) != QUIT && lost != 1){
-        moveFrog(frog, config, action, obs);
+        // sizeErr(config);
+        moveFrog(windows, frog, config, action, obs);
         clearBuffer(buffer, config);
 
         time_t currentTime = time(NULL);
@@ -835,7 +889,7 @@ void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car 
         }
 
         // every SPEED_INT seconds, a random car will be generated to change speed
-        speedChange(cars, config, MIN_SPEED, MAX_SPEED, elapsedTime);
+        speedChange(windows, cars, config, min_sp, max_sp, elapsedTime);
         
         // if the time reaches the limit - end the game
         if (elapsedTime == config.maxTime) {
@@ -859,18 +913,8 @@ void mainLoop(Windows windows, char *buffer, GameConfig config, Frog* frog, Car 
 int main() {
     srand(time(NULL)); // seeding
     Frog frog;
-    GameConfig config;
+    Config config;
     loadConfig(&config, "config.txt");
-    frog.lives = config.frogLives;
-    frog.score = 0;
-    char* buffer = createBuffer(config);
-
-    int num_obs = getRandom(config.r-1, 1);
-    Obstacle* obs = (Obstacle*) malloc(num_obs*sizeof(Obstacle));
-
-    struct timespec currentTime;
-    clock_gettime(CLOCK_MONOTONIC, &currentTime); 
-    frog.lastMove = currentTime;
 
     initscr(); // initialize ncurses
     curs_set(0);
@@ -886,10 +930,22 @@ int main() {
     keypad(windows.game_win,TRUE);
     refresh();
     if (!windows.game_win) {
-        fprintf(stderr, "Failed to create window.\n");
+        printw("Failed to create window");
         endwin();
         exit(1);
     }   
+    sizeErr(config);
+    frog.lives = config.frogLives;
+    frog.score = 0;
+    char* buffer = createBuffer(config);
+
+    int num_obs = getRandom(config.r-1, 1);
+    Obstacle* obs = (Obstacle*) malloc(num_obs*sizeof(Obstacle));
+
+    struct timespec currentTime;
+    clock_gettime(CLOCK_MONOTONIC, &currentTime); 
+    frog.lastMove = currentTime;
+
 
     Car* cars = (Car*)malloc(config.numCars * sizeof(Car));
     
