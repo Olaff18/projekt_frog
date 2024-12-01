@@ -915,9 +915,9 @@ void frState(Windows windows, Frog *frog, Config config, Car* cars, time_t *star
     if (frog->y - 1 == 0) { // when frog gets to the finish line
             frog->score += 1;
             bonus(windows, 1, config, frog);
-            // frogFinMes(windows.status_win, config, *frog, elapsedTime);
-            // frogRestart(windows, config, cars, frog, startTime, elapsedTime, max_sp, max_sp, stork);
-            frogFin(windows, config, cars, frog, startTime, elapsedTime, max_sp, max_sp, stork);
+            frogFinMes(windows.status_win, config, *frog, elapsedTime);
+            frogRestart(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
+            // frogFin(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
             obsR(obs, config);
     }
     else{
@@ -927,9 +927,9 @@ void frState(Windows windows, Frog *frog, Config config, Car* cars, time_t *star
             *lost = 1; // flag so that quitGame() menu wont show
         }
         else if(hit_result == 2){
-            // hitStatus(windows.status_win, config, *frog, elapsedTime);   
-            // frogRestart(windows, config, cars, frog, startTime, elapsedTime, max_sp, max_sp, stork);
-            frogHitFunc(windows, config, frog, cars, elapsedTime, min_sp, max_sp, startTime, stork);
+            hitStatus(windows.status_win, config, *frog, elapsedTime);   
+            frogRestart(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
+            // frogHitFunc(windows, config, frog, cars, elapsedTime, min_sp, max_sp, startTime, stork);
             obsR(obs, config);
         }
         else{
