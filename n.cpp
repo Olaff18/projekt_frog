@@ -266,9 +266,11 @@ int getRandom(int max_value, int min_value) {
 }
 
 void initStork(Stork *stork, Config config) {
-    stork->x = getRandom(config.c-1, 1); // Random x position
-    stork->y = getRandom(2*config.r, 1); // Random y position
+    do{
+        stork->x = getRandom(config.c-1, 1); // Random x position
+        stork->y = getRandom(2*config.r, 1); // Random y position
     stork->symbol = config.storkSymbol; // Choose an appropriate symbol
+    }while(stork->x == (2*config.r - 1) && stork->y == config.r/2); // genereate storks x and y until different than frogs position
 }
 
 void row(Car* cars, Config config, int *i, int *rrow, int *flag_in, int *crows){
@@ -316,6 +318,7 @@ void initCars(Car* cars, Config config) {
         clock_gettime(CLOCK_MONOTONIC, &start_time);
         double start_time_ms = start_time.tv_sec * 1000 + start_time.tv_nsec / 1000000;
         cars[i].lastMove = start_time_ms;
+        cars[i].ride = 0; // so that the frog doesnt move when the game starts after hit by stork
     }
     free(crows);
 }
@@ -706,7 +709,7 @@ void drawCars(char* buffer, Car* cars, Config config) {
 
 void initFrog(Windows windows, Config config, Frog* frog){
         frog->x = config.c / 2;
-        frog->y = 2 * config.r - 1;
+        frog->y = 2*config.r - 1;
         frog->symbol = config.frogSymbol;
         frog->is_riding = 0;
         frog->ride = 0;
