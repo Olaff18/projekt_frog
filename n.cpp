@@ -15,6 +15,10 @@
 #define JUMP_BREAK     0.1 // break in seconds between frog jumps
 #define TOP_DISPLAY    5   // amount of top scores to display in the ranking
 
+//------------------------------------------------
+//----------------  DATA STRUCTURES --------------
+//------------------------------------------------
+
 typedef struct {
     int r;          // number of rows in the playing area
     int c;          // number of columns in the playing area
@@ -30,6 +34,126 @@ typedef struct {
     int frogLives;
     int dis_am;
 } Config;
+
+typedef struct {
+    WINDOW* game_win;   // main game window
+    WINDOW* status_win; // status menu window
+    WINDOW* error_win; // error window for showing non-fatal errors, for fatal errors I use exit(1)
+    WINDOW* bonus_win; // window for jumpcount and bonus points
+} Windows;
+
+// struct for cars, with parameters: row - cars w, cx - cars x coordinate, speed - cars speed
+typedef struct {
+    int row;
+    int cx;
+    int speed;
+    double lastMove; // time representation; to capture the point of time of cars last move, to update its position
+    double disappearTime;
+    int disapeared;
+    char symbol;
+    int prev_pos;
+    int prev_speed;
+    int carStopped;
+    int carBounce;
+    int friendly;
+    int ride;       // flag whether a friendly car is giving a ride to a frog or no
+    int lvl2;       // whether it is a car generated on lvl2 or not
+} Car;
+
+typedef struct {
+    int x;        // current x-position of the frog
+    int y;        // current y-position of the frog
+    int lives;    // number of lives the frog has
+    int score;    // player's score
+    char symbol;
+    struct timespec lastMove;
+    int ride;     // checking if the frog is ready to ried a friendly car
+    int is_riding;// checking if the frog is currently riding a friendly car
+    int jumpCount;
+    int lvl;
+} Frog;
+
+typedef struct {
+    char symbol;
+    int x;
+    int y;
+    int numObs;
+} Obstacle;
+
+typedef struct {
+    int x; 
+    int y; 
+    char symbol;
+    struct timespec lastMove;
+} Stork;
+
+//------------------------------------------------
+//----------------  WINDOW FUNCTIONS -------------
+//------------------------------------------------
+
+// initialize windows
+Windows initWindows(Config config) {
+    Windows windows;
+    windows.game_win = newwin(2*config.r + 1, config.c, 0, 0);
+    windows.status_win = newwin(5, config.c, 0, config.c+1);
+    windows.error_win = newwin(1, config.c, 2*config.r + 1, 0);
+    windows.bonus_win = newwin(1, config.c, 5, config.c+1);
+    box(windows.status_win, 0, 0); // draw a border for the status menu
+    refresh();
+    return windows;
+}
+
+// initializing necessary functions for window to properly work
+void initWinFunc(){
+    initscr(); // initialize ncurses
+    curs_set(0);
+    cbreak();
+    noecho();
+    start_color(); // enable colors
+    init_pair(1, COLOR_GREEN, COLOR_BLACK); // frog color
+    init_pair(2, COLOR_RED, COLOR_BLACK);   // enemy car color
+    init_pair(3, COLOR_YELLOW, COLOR_BLACK);   // stop car color
+    init_pair(4, COLOR_MAGENTA, COLOR_BLACK);   // friendly car color
+    init_pair(5, COLOR_CYAN, COLOR_BLACK);   // stork color
+}
+
+// displaying the bonus points window
+void bonus(Windows windows, int flag, Config config, Frog *frog){
+    mvwprintw(windows.bonus_win, 0, 1, "Jumps: %d", frog->jumpCount);
+    if(flag == 1){
+        if(frog->jumpCount <= 3*config.r){
+            mvwprintw(windows.bonus_win, 0, 11, " | Bonus point for jumps!");
+            frog->score += 1;
+        }
+    }
+    wrefresh(windows.bonus_win);
+}
+
+
+
+// check if terminal fits
+void sizeErr(Config config){
+    int r, c;
+    int requiredRows = 2*config.r;
+    int requiredCols = config.c;
+    getmaxyx(stdscr, r, c);
+    if (r < requiredRows || c < requiredCols) {
+        // if terminal size is smaller than the required size
+        printw("Error: Terminal window is too small to display the game map.\n");
+        printw("Required size: %d rows x %d columns\n", requiredRows, requiredCols);
+        printw("Current size: %d rows x %d columns\n", r, c);
+        refresh();
+        // wait for user input before exiting
+        getchar();
+        endwin();
+        exit(1);  
+    }
+
+}
+
+//------------------------------------------------
+//----------------  FILE FUNCTIONS ---------------
+//------------------------------------------------
 
 // function for opening the file and loading the data into the config struct
 void loadConfig(Config* config, const char* filename) {
@@ -68,75 +192,6 @@ void loadConfig(Config* config, const char* filename) {
     fclose(file);
 }
 
-
-typedef struct {
-    WINDOW* game_win;   // main game window
-    WINDOW* status_win; // status menu window
-    WINDOW* error_win; // error window for showing non-fatal errors, for fatal errors I use exit(1)
-    WINDOW* bonus_win; // window for jumpcount and bonus points
-} Windows;
-
-// initialize windows
-Windows initWindows(Config config) {
-    Windows windows;
-    windows.game_win = newwin(2*config.r + 1, config.c, 0, 0);
-    windows.status_win = newwin(5, config.c, 0, config.c+1);
-    windows.error_win = newwin(1, config.c, 2*config.r + 1, 0);
-    windows.bonus_win = newwin(1, config.c, 5, config.c+1);
-    box(windows.status_win, 0, 0); // draw a border for the status menu
-    refresh();
-    return windows;
-}
-
-void initWinFunc(){
-    initscr(); // initialize ncurses
-    curs_set(0);
-    cbreak();
-    noecho();
-    start_color(); // enable colors
-    init_pair(1, COLOR_GREEN, COLOR_BLACK); // frog color
-    init_pair(2, COLOR_RED, COLOR_BLACK);   // enemy car color
-    init_pair(3, COLOR_YELLOW, COLOR_BLACK);   // stop car color
-    init_pair(4, COLOR_MAGENTA, COLOR_BLACK);   // friendly car color
-    init_pair(5, COLOR_CYAN, COLOR_BLACK);   // stork color
-}
-
-// check if terminal fits
-void sizeErr(Config config){
-    int r, c;
-    int requiredRows = 2*config.r;
-    int requiredCols = config.c;
-    getmaxyx(stdscr, r, c);
-    if (r < requiredRows || c < requiredCols) {
-        // if terminal size is smaller than the required size
-        printw("Error: Terminal window is too small to display the game map.\n");
-        printw("Required size: %d rows x %d columns\n", requiredRows, requiredCols);
-        printw("Current size: %d rows x %d columns\n", r, c);
-        refresh();
-        // wait for user input before exiting
-        getchar();
-        endwin();
-        exit(1);  
-    }
-
-}
-
-void startGame(){
-    const char *frogEmoji =
-    "      @..@\n"
-    "     (----)\n"
-    "    ( >__< )\n"
-    "   ^^  ~~  ^^";
-    printw("Welcome to the frog game!\n");
-    printw("Avoid the cars, dodge the stork, and reach the goal!\n");
-    printw("Press any key to start.\n\n");
-    printw(frogEmoji);
-
-    refresh();
-    getchar();
-    clear();
-    refresh();
-}
 
 void saveScore(Windows windows, const char *filename, int score) {
     FILE *file = fopen(filename, "a");
@@ -230,61 +285,9 @@ void displayTopScores(Windows windows, const char *filename){
     free(scores);
 }
 
-// struct for cars, with parameters: row - cars w, cx - cars x coordinate, speed - cars speed
-typedef struct {
-    int row;
-    int cx;
-    int speed;
-    double lastMove; // time representation; to capture the point of time of cars last move, to update its position
-    double disappearTime;
-    int disapeared;
-    char symbol;
-    int prev_pos;
-    int prev_speed;
-    int carStopped;
-    int carBounce;
-    int friendly;
-    int ride;       // flag whether a friendly car is giving a ride to a frog or no
-    int lvl2;       // whether it is a car generated on lvl2 or not
-} Car;
-
-typedef struct {
-    int x;        // current x-position of the frog
-    int y;        // current y-position of the frog
-    int lives;    // number of lives the frog has
-    int score;    // player's score
-    char symbol;
-    struct timespec lastMove;
-    int ride;     // checking if the frog is ready to ried a friendly car
-    int is_riding;// checking if the frog is currently riding a friendly car
-    int jumpCount;
-    int lvl;
-} Frog;
-
-typedef struct {
-    char symbol;
-    int x;
-    int y;
-    int numObs;
-} Obstacle;
-
-typedef struct {
-    int x; 
-    int y; 
-    char symbol;
-    struct timespec lastMove;
-} Stork;
-
-void bonus(Windows windows, int flag, Config config, Frog *frog){
-    mvwprintw(windows.bonus_win, 0, 1, "Jumps: %d", frog->jumpCount);
-    if(flag == 1){
-        if(frog->jumpCount <= 3*config.r){
-            mvwprintw(windows.bonus_win, 0, 11, " | Bonus point for jumps!");
-            frog->score += 1;
-        }
-    }
-    wrefresh(windows.bonus_win);
-}
+//------------------------------------------------
+//--------------- RANDOM FUNCTIONS ---------------
+//------------------------------------------------
 
 // function for generating a random row, with the step = 2, so the values are only odd
 int getRandomStep(int max_value, int min_value, int step) {
@@ -298,6 +301,10 @@ int getRandom(int max_value, int min_value) {
     return random_value;
 }
 
+//------------------------------------------------
+//----------------  STORK FUNCTIONS --------------
+//------------------------------------------------
+
 void initStork(Stork *stork, Config config) {
     do{
         stork->x = getRandom(config.c-1, 1); // Random x position
@@ -305,6 +312,35 @@ void initStork(Stork *stork, Config config) {
     stork->symbol = config.storkSymbol; // Choose an appropriate symbol
     }while(stork->x == (2*config.r - 1) && stork->y == config.r/2); // genereate storks x and y until different than frogs position
 }
+
+void mvStork(Stork *stork, Frog frog, Config config, time_t startTime) {
+    // calculating the direction of movement
+    struct timespec currentTime;
+    clock_gettime(CLOCK_MONOTONIC, &currentTime); // get high-resolution time
+    if (getElapsedTime(stork->lastMove, currentTime) >= 8*JUMP_BREAK*1000) {
+        int dx = frog.x - stork->x; // checking if frog is on the left or right side of the stork (or inline)
+        int dy = frog.y - stork->y; // checking if the frog is above or below of the stork (or inline)
+
+        if (dx != 0) dx /= abs(dx); // if not inline - divide dx by its absolute value to generate 1 or -1 (left move or right)
+        if (dy != 0) dy /= abs(dy); // if not inline - divide dx by its absolute value to generate 1 or -1 (up move or down)
+
+        // updating the storks position
+        stork->x += dx;
+        stork->y += dy;
+
+        stork->lastMove = currentTime;
+
+        // boundary check for the stork, just to be safe
+        if (stork->x < 0) stork->x = 0;
+        if (stork->x >= config.c) stork->x = config.c - 1;
+        if (stork->y < 0) stork->y = 0;
+        if (stork->y >= 2 * config.r) stork->y = 2 * config.r - 1;
+    }
+}
+
+//------------------------------------------------
+//----------------  CAR FUNCTIONS ----------------
+//------------------------------------------------
 
 void row(Car* cars, Config *config, int *i, int *rrow, int *flag_in, int *crows){
     int attempts = 0;
@@ -362,16 +398,19 @@ void initCars(Car* cars, Config *config) {
         cars[i].ride = 0; // so that the frog doesnt move when the game starts after hit by stork
     }
     free(crows);
-
-    // for(int i = 0; i<config->numCars; i++){       
-    // // printw("car %d: %d\n",i, cars[i].speed);
-    // printw("car %d: %d\n",i, config->carSpeeds[i]);
-    // }
-    // printw("car: %d\n", config->numCars);
-    // refresh();
-    // getchar();
 }
 
+void initCarParams(Car* cars, Config* config){
+    // cars init position and disappeared status
+    for(int i=0; i<config->numCars; i++){
+        cars[i].disapeared = 0;
+        cars[i].carStopped = 0;
+        cars[i].cx = 1;
+        cars[i].symbol = config->carSymbol;
+        cars[i].carBounce = 0;
+        cars[i].friendly = 0;
+    }
+}
 
 // setting the initial speed for the cars
 void setSpeed(Car *cars, Config *config, int min_sp, int max_sp){
@@ -598,19 +637,38 @@ void fCar(Car *cars, Frog* frog, Config config){
     }
 }
 
+//------------------------------------------------
+//----------------  FROG FUNCTIONS ---------------
+//------------------------------------------------
 
 // function for checking if the frog was hit by a car
+
+void initFrog(Windows windows, Config config, Frog* frog){
+        frog->x = config.c / 2;
+        frog->y = 2*config.r - 1;
+        frog->symbol = config.frogSymbol;
+        frog->is_riding = 0;
+        frog->ride = 0;
+        frog->jumpCount = 0;
+        werase(windows.error_win);       
+        wrefresh(windows.error_win); 
+        werase(windows.bonus_win);
+        wrefresh(windows.bonus_win);
+}
+
 int frogHit(Windows windows, Car *cars, Config config, Frog* frog, char* buffer, WINDOW* win, Stork stork) {
             
     for (int i = 0; i < config.numCars; i++) {
 
         if (!cars || !frog) {
         printw("Invalid pointer: cars or frog is NULL");
+        getchar();
         endwin();
         exit(1);
         }
         if (i < 0 || i >= config.numCars) {
             printw("Out of bounds access on cars array: i=%d\n", i);
+            getchar();
             endwin();
             exit(1);
         }
@@ -627,6 +685,133 @@ int frogHit(Windows windows, Car *cars, Config config, Frog* frog, char* buffer,
     // frog hasn't been hit
     return 0;
 }
+
+int frogObs(Frog* frog, Obstacle *obs, int newX, int newY){
+    for (int i = 0; i < obs[0].numObs; i++) {
+        if (obs[i].x == newX && obs[i].y == newY) {
+            return 0; // invalid move
+        }
+    }
+    return 1; // valid move
+}
+
+void frState(Windows windows, Frog *frog, Config *config, Car** cars, time_t *startTime, int elapsedTime, Obstacle **obs, char *buffer, int *lost, Stork *stork){
+    int min_sp = 1;
+    int max_sp = config->c - 2;
+    if (frog->y - 1 == 0) { // when frog gets to the finish line
+            frog->score += 1;
+            bonus(windows, 1, *config, frog);
+            frogFinMes(windows.status_win, *config, *frog, elapsedTime);
+            frogRestart(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
+            // frogFin(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
+            *obs = NULL;
+            obsR(obs, *config);
+    }
+    else{
+        int hit_result = frogHit(
+            windows, *cars, *config, frog, buffer, windows.game_win, *stork);
+        if(hit_result == 1){
+            frogLostMes(windows.status_win, *config, *frog, elapsedTime);   
+            *lost = 1; // flag so that quitGame() menu wont show
+        }
+        else if(hit_result == 2){
+            hitStatus(windows.status_win, *config, *frog, elapsedTime);   
+            frogRestart(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
+            obsR(obs, *config);
+        }
+        else{
+            return;
+        }
+    }
+}
+
+void frogRestart(Windows windows, Config *config, Car **cars, Frog *frog, time_t *startTime, double elapsedTime, int min_sp, int max_sp, Stork *stork){
+    *startTime += WAIT_TIME;
+    initFrog(windows, *config, frog);
+    checkLvl(frog);
+    levels(*frog, stork, config, cars);
+    initCars(*cars, config);
+    initCarParams(*cars, config);
+    stopCarGen(windows, *cars, *frog, config);
+    fCarGen(windows, *cars, *frog, config);
+    setSpeed(*cars, config, min_sp, max_sp);
+}
+
+void mvFrog(Windows windows, Frog *frog, Config config, int action, Obstacle *obs){
+    sizeErr(config);
+    struct timespec currentTime;
+    clock_gettime(CLOCK_MONOTONIC, &currentTime); // get high-resolution time
+
+    if (getElapsedTime(frog->lastMove, currentTime) >= JUMP_BREAK*1000) {
+        if (action != ERR) { // if a key is pressed  
+                    if (action == 'e' || action == 'E'){
+                        if(frog->ride){
+                            frog->ride = 0;
+                        }
+                        else{
+                            frog->ride = 1;
+                        }
+                    }   
+                // move the frog based on input, if the frog is not riding a car
+                if(!frog->is_riding){
+                    if ((action == 'w' || action == 'W') && frog->y - 1 != 0 && frogObs(frog, obs, frog->x, frog->y - 1)) {
+                        frog->y--; 
+                        frog->jumpCount+=1;
+                    }
+                    if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r && frogObs(frog, obs, frog->x, frog->y + 1)){
+                        frog->y++; 
+                        frog->jumpCount+=1;
+                    }
+                    if ((action == 'a' || action == 'A') && frog->x - 1 != 0 && frogObs(frog, obs, frog->x - 1, frog->y)){
+                        frog->x--; 
+                        frog->jumpCount+=1;
+                    }
+                    if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1 && frogObs(frog, obs, frog->x + 1, frog->y)){
+                        frog->x++; 
+                        frog->jumpCount+=1;
+                    }
+                    bonus(windows, 0, config, frog);
+
+                }
+            frog->lastMove = currentTime;
+        }
+    }
+    
+    napms(10);
+}
+
+//------------------------------------------------
+//------------- OBSTACLE FUNCTIONS ---------------
+//------------------------------------------------
+
+void initObs(Config config, Obstacle* obs, int num_obs){
+    for(int i=0; i<num_obs; i++){
+        obs[i].x = getRandom(config.c-2, 1); // x coordinate of an obstacle ranges between first place beside the border to the last one
+        obs[i].y = getRandomStep(2*config.r-1, 2, 2); // y coordinate of an obstacle ranges between the 3rd x of the map, which is a first lane, and the last lane
+        obs[i].symbol = config.obsSymbol;
+        obs[i].numObs = num_obs;
+    }
+}
+
+void obsR(Obstacle **obs, Config config){ // obstacle reallocation function
+    int num_obs = getRandom(config.r-1, 1); // new amount of obstacles
+    Obstacle *new_obs = (Obstacle *)realloc(*obs, num_obs * sizeof(Obstacle));
+    if (new_obs == NULL) {
+        // handle realloc failure (
+        printw("Memory reallocation failed");
+        refresh();
+        getchar();
+        endwin();
+        exit(1);
+    }
+    *obs = new_obs;
+    initObs(config, *obs, num_obs);
+    
+}
+
+//------------------------------------------------
+//-------------- BUFFER FUNCTIONS ----------------  
+//------------------------------------------------
 
 char* createBuffer(Config config) {
     return (char*)malloc((2 * config.r + 1) * config.c * sizeof(char));
@@ -686,6 +871,25 @@ void drawBuffer(WINDOW* win, char* buffer, Config config, Car *cars) {
     wrefresh(win); 
 }
 
+//------------------------------------------------
+//---------------- DRAW FUNCTIONS ----------------  
+//------------------------------------------------
+
+void drawing(Windows windows, Config *config, Car *cars, Frog *frog, Stork *stork, char *buffer, int dis, Obstacle *obs, double elapsedTime){
+        drawBoard(*config, buffer); // draw the border
+        newPos(*config, *frog, buffer); // draw the player's new position
+        // strkPos(config, *stork, buffer);
+        updateCars(cars, config, frog, dis);
+        stopCar(cars, *frog, *config);
+        fCar(cars, frog, *config);
+        drawCars(buffer, cars, *config);
+        drawObs(buffer, *config, obs);
+        strkPos(*config, *stork, buffer);
+        drawBuffer(windows.game_win, buffer, *config, cars); // draw the map to the screen
+        drawStatus(windows.status_win, *config, *frog, elapsedTime); // draw the box status
+
+}
+
 void drawBoard(Config config, char* buffer) {
     // draw borders
     for (int x = 0; x < config.c; x++) {
@@ -709,6 +913,47 @@ void drawStatus(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
     mvwprintw(status_win, 1, 1, "Timer: %d/%d s | Score: %d | Lives: %d | Level: %d", elapsedTime, config.maxTime, frog.score, frog.lives, frog.lvl);
     mvwprintw(status_win, 3, 1, "Michal Binek, 203726");
     wrefresh(status_win);  // refresh to display updates
+}
+
+void drawCars(char* buffer, Car* cars, Config config) {
+    for (int i = 0; i < config.numCars; i++) {
+        buffer[cars[i].row * config.c + cars[i].cx] = cars[i].symbol; 
+    }
+}
+
+void drawObs(char *buffer, Config config, Obstacle *obs){
+    for(int i=0; i<obs[0].numObs; i++){
+        buffer[obs[i].y*config.c + obs[i].x] = obs[i].symbol;
+    }
+}
+
+void newPos(Config config, Frog frog, char *buffer){
+    buffer[frog.y * config.c + frog.x] = frog.symbol;
+}
+
+void strkPos(Config config, Stork stork, char *buffer){
+    buffer[stork.y * config.c + stork.x] = stork.symbol;
+}
+
+//------------------------------------------------
+//---------------- MESSAGE FUNCTIONS -------------  
+//------------------------------------------------
+
+void startGame(){
+    const char *frogEmoji =
+    "      @..@\n"
+    "     (----)\n"
+    "    ( >__< )\n"
+    "   ^^  ~~  ^^";
+    printw("Welcome to the frog game!\n");
+    printw("Avoid the cars, dodge the stork, and reach the goal!\n");
+    printw("Press any key to start.\n\n");
+    printw(frogEmoji);
+
+    refresh();
+    getchar();
+    clear();
+    refresh();
 }
 
 void frogLostMes(WINDOW* status_win, Config config, Frog frog, int elapsedTime) {
@@ -752,153 +997,9 @@ void quitGameMes(WINDOW* status_win, Config config, Frog frog) {
     napms(QUIT_TIME*1000);
 }
 
-void drawCars(char* buffer, Car* cars, Config config) {
-    for (int i = 0; i < config.numCars; i++) {
-        buffer[cars[i].row * config.c + cars[i].cx] = cars[i].symbol; 
-    }
-}
-
-void initFrog(Windows windows, Config config, Frog* frog){
-        frog->x = config.c / 2;
-        frog->y = 2*config.r - 1;
-        frog->symbol = config.frogSymbol;
-        frog->is_riding = 0;
-        frog->ride = 0;
-        frog->jumpCount = 0;
-        werase(windows.error_win);       
-        wrefresh(windows.error_win); 
-        werase(windows.bonus_win);
-        wrefresh(windows.bonus_win);
-}
-
-void initObs(Config config, Obstacle* obs, int num_obs){
-    for(int i=0; i<num_obs; i++){
-        obs[i].x = getRandom(config.c-2, 1); // x coordinate of an obstacle ranges between first place beside the border to the last one
-        obs[i].y = getRandomStep(2*config.r-1, 2, 2); // y coordinate of an obstacle ranges between the 3rd x of the map, which is a first lane, and the last lane
-        obs[i].symbol = config.obsSymbol;
-        obs[i].numObs = num_obs;
-    }
-}
-
-
-void drawObs(char *buffer, Config config, Obstacle *obs){
-    for(int i=0; i<obs[0].numObs; i++){
-        buffer[obs[i].y*config.c + obs[i].x] = obs[i].symbol;
-    }
-}
-
-int frogObs(Frog* frog, Obstacle *obs, int newX, int newY){
-    for (int i = 0; i < obs[0].numObs; i++) {
-        if (obs[i].x == newX && obs[i].y == newY) {
-            return 0; // invalid move
-        }
-    }
-    return 1; // valid move
-}
-
-void initCarParams(Car* cars, Config* config){
-    // cars init position and disappeared status
-    for(int i=0; i<config->numCars; i++){
-        cars[i].disapeared = 0;
-        cars[i].carStopped = 0;
-        cars[i].cx = 1;
-        cars[i].symbol = config->carSymbol;
-        cars[i].carBounce = 0;
-        cars[i].friendly = 0;
-    }
-}
-
-void newPos(Config config, Frog frog, char *buffer){
-    buffer[frog.y * config.c + frog.x] = frog.symbol;
-}
-
-void strkPos(Config config, Stork stork, char *buffer){
-    buffer[stork.y * config.c + stork.x] = stork.symbol;
-}
-
-// function to calculate elapsed time in milliseconds
-long getElapsedTime(struct timespec start, struct timespec end) {
-    return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
-}
-
-void mvFrog(Windows windows, Frog *frog, Config config, int action, Obstacle *obs){
-    sizeErr(config);
-    struct timespec currentTime;
-    clock_gettime(CLOCK_MONOTONIC, &currentTime); // get high-resolution time
-
-    if (getElapsedTime(frog->lastMove, currentTime) >= JUMP_BREAK*1000) {
-        if (action != ERR) { // if a key is pressed  
-                    if (action == 'e' || action == 'E'){
-                        if(frog->ride){
-                            frog->ride = 0;
-                        }
-                        else{
-                            frog->ride = 1;
-                        }
-                    }   
-                // move the frog based on input, if the frog is not riding a car
-                if(!frog->is_riding){
-                    if ((action == 'w' || action == 'W') && frog->y - 1 != 0 && frogObs(frog, obs, frog->x, frog->y - 1)) {
-                        frog->y--; 
-                        frog->jumpCount+=1;
-                    }
-                    if ((action == 's' || action == 'S') && frog->y + 1 != 2 * config.r && frogObs(frog, obs, frog->x, frog->y + 1)){
-                        frog->y++; 
-                        frog->jumpCount+=1;
-                    }
-                    if ((action == 'a' || action == 'A') && frog->x - 1 != 0 && frogObs(frog, obs, frog->x - 1, frog->y)){
-                        frog->x--; 
-                        frog->jumpCount+=1;
-                    }
-                    if ((action == 'd' || action == 'D') && frog->x + 1 != config.c - 1 && frogObs(frog, obs, frog->x + 1, frog->y)){
-                        frog->x++; 
-                        frog->jumpCount+=1;
-                    }
-                    bonus(windows, 0, config, frog);
-
-                }
-            frog->lastMove = currentTime;
-        }
-    }
-    
-    napms(10);
-}
-
-void mvStork(Stork *stork, Frog frog, Config config, time_t startTime) {
-    // calculating the direction of movement
-    struct timespec currentTime;
-    clock_gettime(CLOCK_MONOTONIC, &currentTime); // get high-resolution time
-    if (getElapsedTime(stork->lastMove, currentTime) >= 8*JUMP_BREAK*1000) {
-        int dx = frog.x - stork->x; // checking if frog is on the left or right side of the stork (or inline)
-        int dy = frog.y - stork->y; // checking if the frog is above or below of the stork (or inline)
-
-        if (dx != 0) dx /= abs(dx); // if not inline - divide dx by its absolute value to generate 1 or -1 (left move or right)
-        if (dy != 0) dy /= abs(dy); // if not inline - divide dx by its absolute value to generate 1 or -1 (up move or down)
-
-        // updating the storks position
-        stork->x += dx;
-        stork->y += dy;
-
-        stork->lastMove = currentTime;
-
-        // boundary check for the stork, just to be safe
-        if (stork->x < 0) stork->x = 0;
-        if (stork->x >= config.c) stork->x = config.c - 1;
-        if (stork->y < 0) stork->y = 0;
-        if (stork->y >= 2 * config.r) stork->y = 2 * config.r - 1;
-    }
-}
-
-void initFunc(Windows windows, Config* config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, int max_sp, int min_sp, Stork* stork){
-    setSpeed(cars, config, min_sp, max_sp); // setting initial car speeds
-    initCars(cars, config);
-    initFrog(windows, *config, frog);
-    initCarParams(cars, config); // initial car parameters
-    initObs(*config, obs, num_obs); // initialize obstacle parameters
-    stopCarGen(windows, cars, *frog, config); // generate car id's which will be stopping
-    fCarGen(windows, cars, *frog, config);    // generate friendly car id'
-    printw("%d\n", config->numCars);
-}
+//------------------------------------------------
+//---------------- LEVEL FUNCTIONS ---------------  
+//------------------------------------------------
 
 void checkLvl(Frog* frog){
     if(frog->score<3) frog->lvl=1;
@@ -946,93 +1047,25 @@ void levels(Frog frog, Stork *stork, Config *config, Car **cars){
     if(frog.lvl==3) initStork(stork, *config);
 }
 
-void frogRestart(Windows windows, Config *config, Car **cars, Frog *frog, time_t *startTime, double elapsedTime, int min_sp, int max_sp, Stork *stork){
-    *startTime += WAIT_TIME;
+//------------------------------------------------
+//---------------- OTHER FUNCTIONS ---------------  
+//------------------------------------------------
+
+// function to calculate elapsed time in milliseconds
+long getElapsedTime(struct timespec start, struct timespec end) {
+    return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000;
+}
+
+
+void initFunc(Windows windows, Config* config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, int max_sp, int min_sp, Stork* stork){
+    setSpeed(cars, config, min_sp, max_sp); // setting initial car speeds
+    initCars(cars, config);
     initFrog(windows, *config, frog);
-    checkLvl(frog);
-    levels(*frog, stork, config, cars);
-    initCars(*cars, config);
-    initCarParams(*cars, config);
-    stopCarGen(windows, *cars, *frog, config);
-    fCarGen(windows, *cars, *frog, config);
-    setSpeed(*cars, config, min_sp, max_sp);
-}
-
-void drawing(Windows windows, Config *config, Car *cars, Frog *frog, Stork *stork, char *buffer, int dis, Obstacle *obs, double elapsedTime){
-        drawBoard(*config, buffer); // draw the border
-        newPos(*config, *frog, buffer); // draw the player's new position
-        // strkPos(config, *stork, buffer);
-        updateCars(cars, config, frog, dis);
-        stopCar(cars, *frog, *config);
-        fCar(cars, frog, *config);
-        drawCars(buffer, cars, *config);
-        drawObs(buffer, *config, obs);
-        strkPos(*config, *stork, buffer);
-        drawBuffer(windows.game_win, buffer, *config, cars); // draw the map to the screen
-        drawStatus(windows.status_win, *config, *frog, elapsedTime); // draw the box status
-
-}
-
-void frogHitFunc(Windows windows, Config *config, Frog *frog, Car **cars, double elapsedTime, int min_sp, int max_sp, time_t *startTime, Stork *stork){
-    hitStatus(windows.status_win, *config, *frog, elapsedTime);   
-    *startTime += WAIT_TIME;
-    initFrog(windows, *config, frog);
-    checkLvl(frog);
-    // if(frog->lvl=3) initStork(stork, config);
-    levels(*frog, stork, config, cars);
-    initCars(*cars, config);
-    initCarParams(*cars, config);
-    stopCarGen(windows, *cars, *frog, config);
-    fCarGen(windows, *cars, *frog, config);
-    setSpeed(*cars, config, min_sp, max_sp);
-}
-
-void obsR(Obstacle **obs, Config config){ // obstacle reallocation function
-    int num_obs = getRandom(config.r-1, 1); // new amount of obstacles
-    Obstacle *new_obs = (Obstacle *)realloc(*obs, num_obs * sizeof(Obstacle));
-    if (new_obs == NULL) {
-        // handle realloc failure (
-        printw("Memory reallocation failed");
-        refresh();
-        getchar();
-        endwin();
-        exit(1);
-    }
-    *obs = new_obs;
-    initObs(config, *obs, num_obs);
-    
-}
-
-void frState(Windows windows, Frog *frog, Config *config, Car** cars, time_t *startTime, int elapsedTime, Obstacle **obs, char *buffer, int *lost, Stork *stork){
-    int min_sp = 1;
-    int max_sp = config->c - 2;
-    if (frog->y - 1 == 0) { // when frog gets to the finish line
-            frog->score += 1;
-            bonus(windows, 1, *config, frog);
-            frogFinMes(windows.status_win, *config, *frog, elapsedTime);
-            frogRestart(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
-            // frogFin(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
-            *obs = NULL;
-            obsR(obs, *config);
-    }
-    else{
-        int hit_result = frogHit(
-            windows, *cars, *config, frog, buffer, windows.game_win, *stork);
-        if(hit_result == 1){
-            frogLostMes(windows.status_win, *config, *frog, elapsedTime);   
-            *lost = 1; // flag so that quitGame() menu wont show
-        }
-        else if(hit_result == 2){
-            hitStatus(windows.status_win, *config, *frog, elapsedTime);   
-            frogRestart(windows, config, cars, frog, startTime, elapsedTime, min_sp, max_sp, stork);
-            // frogHitFunc(windows, config, frog, cars, elapsedTime, min_sp, max_sp, startTime, stork);
-            
-            obsR(obs, *config);
-        }
-        else{
-            return;
-        }
-    }
+    initCarParams(cars, config); // initial car parameters
+    initObs(*config, obs, num_obs); // initialize obstacle parameters
+    stopCarGen(windows, cars, *frog, config); // generate car id's which will be stopping
+    fCarGen(windows, cars, *frog, config);    // generate friendly car id'
+    printw("%d\n", config->numCars);
 }
 
 void frB(char *buffer, Car *cars, Obstacle *obs, Config *config){ //free the dynamic arrays
@@ -1041,24 +1074,6 @@ void frB(char *buffer, Car *cars, Obstacle *obs, Config *config){ //free the dyn
     free(obs);
     free(config->carSpeeds); // ?
 }
-
-// void lvl(Windows windows, Config config, Car *cars, Frog *frog, Stork *stork, char *buffer, int dis, Obstacle *obs, double elapsedTime){
-//     int level = checkLvl(*frog);
-//     drawing(windows, config, cars, frog, stork, buffer, dis, obs, elapsedTime);
-//     switch(level){
-//         case 1:
-
-//     }
-// }
-
-// void lvl1(Windows windows, Config config, Car *cars, Frog *frog, Stork *stork, char *buffer, int dis, Obstacle *obs, double elapsedTime){
-    
-// }
-
-// void iniFrM(Frog *frog, Config config){
-//     frog->lives = config.frogLives;
-//     frog->score = 0;
-// }
 
 void mainLoop(Windows windows, char *buffer, Config *config, Frog* frog, Car **cars, Obstacle *obs, int num_obs, Stork *stork){
     int min_sp= 1;
@@ -1149,7 +1164,4 @@ int main() {
 
     return 0;
 }
-
-    // mvwprintw(windows.game_win, 2, 2, "%d", obs[0].numObs);
-    // getchar();
 
