@@ -353,11 +353,13 @@ void displayTopScores(Windows windows, const char *filename){
         free(scores); 
         return;
     }
-    
+    int count;
     // put elements into scores array
     for (int i = 0; i < scoreCount; i++) {
         fscanf(file, "%d", &scores[i]);
+        count++; 
     }
+
 
     sortScores(scores, scoreCount);
     // clear the window
@@ -366,7 +368,17 @@ void displayTopScores(Windows windows, const char *filename){
     werase(windows.bonus_win);       
     wrefresh(windows.bonus_win);  
     werase(windows.status_win);       
-    wrefresh(windows.status_win);    
+    wrefresh(windows.status_win);  
+
+    if(count < TOP_DISPLAY){
+        mvwprintw(windows.game_win, 1, 1, "at least %d scores needed for ranking!", TOP_DISPLAY);
+        wrefresh(windows.game_win); 
+        getchar();
+        endwin();
+        exit(1);
+        
+    } 
+
     // print a title
     mvwprintw(windows.game_win, 1, 1, "Top %d Scores:", TOP_DISPLAY);
     // display scores
@@ -448,7 +460,7 @@ void row(Car* cars, Config *config, int *i, int *rrow, int *flag_in, int *crows)
         else {
             while (*flag_in == 0) { // generates odd rows, until it generates a unique one
 
-                *rrow = getRandomStep(2 * config->r, 1, 2); // ???
+                *rrow = getRandomStep(2 * config->r, 1, 2); 
                 int count = 0;
                 for (int j = 0; j < *i; j++) {
                     if (*rrow != crows[j]) {
@@ -1077,7 +1089,7 @@ void drawing(Windows windows, Config *config, Car *cars, Frog *frog, Stork *stor
     fCar(cars, frog, *config);
     drawCars(buffer, cars, *config);
     drawObs(buffer, *config, obs);
-    if(frog->lvl == 3) strkPos(*config, *stork, buffer); // ????
+    if(frog->lvl == 3) strkPos(*config, *stork, buffer); 
     drawBuffer(windows.game_win, buffer, *config, cars); // draw the map to the screen
     drawStatus(windows.status_win, *config, *frog, elapsedTime); // draw the box status
 
@@ -1201,4 +1213,3 @@ int main() {
 
     return 0;
 }
-
