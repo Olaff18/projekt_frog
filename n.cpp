@@ -488,8 +488,8 @@ void lvl2Zero(Car *cars, Config *config){
 void setSpeed(Car *cars, Config *config, int min_sp, int max_sp){
     for(int i = 0; i<config->numCars; i++){       
         if (cars[i].lvl2) { 
-            cars[i].speed = config->c / 3;
-            cars[i].prev_speed = config->c / 3;
+            cars[i].speed = getRandom(config->c-2, 1);
+            cars[i].prev_speed = cars[i].speed;
         } else {
             if (config->carSpeeds[i] < min_sp) cars[i].speed = min_sp;
             else if (config->carSpeeds[i] > max_sp) cars[i].speed = max_sp;
@@ -758,8 +758,8 @@ void checkLvl(Frog* frog){
 
 void initLvl2(Car *cars, Config *config, int first, int last){
     for(int i=first; i<=last; i++){
-        cars[i].speed = (config->c)/3;
-        cars[i].prev_speed = (config->c)/3;
+        cars[i].speed = getRandom(config->c-2, 1);
+        cars[i].prev_speed = cars[i].speed;
         cars[i].disapeared = 0;
         cars[i].carStopped = 0;
         cars[i].cx = 1;
