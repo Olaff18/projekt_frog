@@ -1192,6 +1192,7 @@ int main() {
     }   
     refresh();
     
+    
     frog.lives = config.frogLives;
     frog.score = 0;
 
