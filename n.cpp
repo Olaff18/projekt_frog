@@ -1,8 +1,14 @@
-#include <ncurses.h> // spawnuja sie na pozycji 0
+// some lines of code were inspired by dr Malafiejski's demo game
+// f.e structure of the game, #define's, while loop
+
+// https://www.tutorialspoint.com/c_standard_library/c_function_realloc.htm - realloc tutorial
+
+#include <ncurses.h> 
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
+
 #define DISAPPEAR_WAIT 2   // cooldown after car disappearing
 #define QUIT_TIME	   3   // .. seconds to quit
 #define WAIT_TIME      2   // time to wait during the message
@@ -140,6 +146,7 @@ void sizeErr(Config config){
         printw("Required size: %d rows x %d columns\n", requiredRows, requiredCols);
         printw("Current size: %d rows x %d columns\n", r, c);
         refresh();
+        napms(1000);
         // wait for user input before exiting
         getchar();
         endwin();
@@ -323,7 +330,6 @@ int countScores(Windows windows, const char *filename) {
 }
 
 void sortScores(int *scores, int scoreCount) {
-    // sort scores in descending order with bubble sort
     for (int i = 0; i < scoreCount-1 - 1; i++) {
         for (int j = i + 1; j < scoreCount; j++) {
             if (scores[i] < scores[j]) {
@@ -333,6 +339,17 @@ void sortScores(int *scores, int scoreCount) {
             }
         }
     }
+}
+
+void rankingErr(Windows windows, int count){
+        if(count < TOP_DISPLAY){
+        mvwprintw(windows.game_win, 1, 1, "at least %d scores needed for ranking!", TOP_DISPLAY);
+        wrefresh(windows.game_win); 
+        getchar();
+        endwin();
+        exit(1);
+        
+    } 
 }
 
 void displayTopScores(Windows windows, const char *filename){
@@ -360,7 +377,6 @@ void displayTopScores(Windows windows, const char *filename){
         count++; 
     }
 
-
     sortScores(scores, scoreCount);
     // clear the window
     werase(windows.game_win);       
@@ -370,14 +386,7 @@ void displayTopScores(Windows windows, const char *filename){
     werase(windows.status_win);       
     wrefresh(windows.status_win);  
 
-    if(count < TOP_DISPLAY){
-        mvwprintw(windows.game_win, 1, 1, "at least %d scores needed for ranking!", TOP_DISPLAY);
-        wrefresh(windows.game_win); 
-        getchar();
-        endwin();
-        exit(1);
-        
-    } 
+    rankingErr(windows, count);
 
     // print a title
     mvwprintw(windows.game_win, 1, 1, "Top %d Scores:", TOP_DISPLAY);
@@ -416,9 +425,9 @@ int getRandom(int max_value, int min_value) {
 
 void initStork(Stork *stork, Config config) {
     do{
-        stork->x = getRandom(config.c-1, 1); // Random x position
-        stork->y = getRandom(2*config.r, 1); // Random y position
-    stork->symbol = config.storkSymbol; // Choose an appropriate symbol
+        stork->x = getRandom(config.c-1, 1); // random x position
+        stork->y = getRandom(2*config.r, 1); // random y position
+    stork->symbol = config.storkSymbol;
     }while(stork->x == (2*config.r - 1) && stork->y == config.r/2); // genereate storks x and y until different than frogs position
 }
 
@@ -654,7 +663,6 @@ void speedChange(Windows windows, Car *cars, Config config, int min_sp, int max_
 
             attempts++;
             if (attempts > config.numCars) {
-                // fprintf(stderr, "Failed to find a car with non-zero speed.\n");
                 mvwprintw(windows.error_win, 0, 0, "Failed to find a car with non-zero speed.");
                 wrefresh(windows.error_win);
                 return; 
@@ -667,7 +675,7 @@ void speedChange(Windows windows, Car *cars, Config config, int min_sp, int max_
             speed_ch = getRandom(SPEED_RANGE, -SPEED_RANGE);
             attempts++;
             if (attempts > SPEED_RANGE * 2) {
-                speed_ch = 1; // Default to a valid value if takes too long
+                speed_ch = 1; // default to a valid value if takes too long
                 break;
             }
         }while(speed_ch == 0); // to ensure that the speed change won't be = 0
@@ -1102,7 +1110,6 @@ void drawing(Windows windows, Config *config, Car *cars, Frog *frog, Stork *stor
 void initFunc(Windows windows, Config* config, Car *cars, Frog *frog, Obstacle *obs, int num_obs, int max_sp, int min_sp){
     setSpeed(cars, config, min_sp, max_sp); // setting initial car speeds
     initCars(cars, config);
-    // if(frog->lvl>=2) initLvl2(cars, config, )
     initFrog(windows, *config, frog);
     initCarParams(cars, config); // initial car parameters
     initObs(*config, obs, num_obs); // initialize obstacle parameters
